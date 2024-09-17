@@ -29,16 +29,65 @@
  * wait_time seconds using sleeping functions */
 uint64_t get_elapsed_sleep(long sec, long nsec)
 {
-	/* IMPLEMENT ME! */
+	uint64_t start, end;
+    /*struct timespec req, rem;
+
+    req.tv_sec = sec;
+    req.tv_nsec = nsec;*/
+
+	get_clocks(start);
+	get_clocks(end);
+
+	return(end - start);
 }
 
 /* Return the number of clock cycles elapsed when waiting for
  * wait_time seconds using busy-waiting functions */
 uint64_t get_elapsed_busywait(long sec, long nsec)
 {
-	/* IMPLEMENT ME! */
-}
+    uint64_t start_tsc, end_tsc;
+    struct timespec begin_timestamp, current_timestamp;
+    struct timespec target_timestamp;
 
+    // Get the current time as begin_timestamp
+    if (clock_gettime(CLOCK_MONOTONIC, &begin_timestamp) != 0) {
+        perror("clock_gettime failed");
+        return 0;
+    }
+
+    // Calculate target_timestamp = begin_timestamp + (sec, nsec)
+    target_timestamp.tv_sec = begin_timestamp.tv_sec + sec;
+    target_timestamp.tv_nsec = begin_timestamp.tv_nsec + nsec;
+
+    // Normalize target_timestamp
+    if (target_timestamp.tv_nsec >= 1000000000L) {
+        target_timestamp.tv_sec += target_timestamp.tv_nsec / 1000000000L;
+        target_timestamp.tv_nsec = target_timestamp.tv_nsec % 1000000000L;
+    }
+
+    // Get start TSC
+    start_tsc = get_clocks();
+
+    while (1) {
+        // Get the current time
+        if (clock_gettime(CLOCK_MONOTONIC, &current_timestamp) != 0) {
+            perror("clock_gettime failed");
+            return 0;
+        }
+
+        // Check if current_timestamp >= target_timestamp
+        if ((current_timestamp.tv_sec > target_timestamp.tv_sec) ||
+            (current_timestamp.tv_sec == target_timestamp.tv_sec &&
+             current_timestamp.tv_nsec >= target_timestamp.tv_nsec)) {
+            break;
+        }
+    }
+
+    // Get end TSC
+    end_tsc = get_clocks();
+
+    return (end_tsc - start_tsc);
+}
 /* Utility function to add two timespec structures together. The input
  * parameter a is updated with the result of the sum. */
 void timespec_add (struct timespec * a, struct timespec * b)
