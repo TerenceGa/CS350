@@ -31,12 +31,13 @@
 #define NANO_IN_SEC (1000*1000*1000)
 
 /* Macro wrapper for RDTSC instruction */
-#define get_clocks(clocks)						
-    do {
+#define get_clocks(clocks)					\
+    do {    \
         unsigned int lo, hi;                                \
         __asm__ volatile ("rdtsc" : "=a" (lo), "=d" (hi));  \
         (clocks) = ((uint64_t)(hi) << 32) | (lo);        \
-    } while(0)                                        \
+    } while(0)                                        
+
 
 /* Return the number of clock cycles elapsed when waiting for
  * wait_time seconds using sleeping functions */

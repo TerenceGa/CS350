@@ -66,7 +66,7 @@ uint64_t get_elapsed_busywait(long sec, long nsec)
     }
 
     // Get start TSC
-    start_tsc = get_clocks();
+    get_clocks(start_tsc);
 
     while (1) {
         // Get the current time
@@ -84,7 +84,7 @@ uint64_t get_elapsed_busywait(long sec, long nsec)
     }
 
     // Get end TSC
-    end_tsc = get_clocks();
+    get_clocks(end_tsc);
 
     return (end_tsc - start_tsc);
 }
