@@ -48,9 +48,45 @@
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
  * with the client is interrupted. */
-static void handle_connection(int conn_socket)
-{
-	/* IMPLEMENT ME! */
+static void handle_connection(int conn_socket) {
+    while (1) {
+        // Structs to store request and response details
+        struct timespec sent_timestamp, request_length, receipt_timestamp, completion_timestamp;
+        uint64_t request_id, reserved_field = 0;
+        uint8_t ack = 0;
+
+        // Receive the request from the client
+        ssize_t bytes_received = recv(conn_socket, &request_id, sizeof(request_id), 0);
+        if (bytes_received <= 0) break; // Exit loop if no more data
+
+        recv(conn_socket, &sent_timestamp, sizeof(sent_timestamp), 0);
+        recv(conn_socket, &request_length, sizeof(request_length), 0);
+
+        // Get receipt timestamp (when the request was received)
+        clock_gettime(CLOCK_REALTIME, &receipt_timestamp);
+
+        // Perform a busy wait for the request length
+        get_elapsed_busywait(request_length.tv_sec, request_length.tv_nsec);
+
+        // Get completion timestamp (after processing)
+        clock_gettime(CLOCK_REALTIME, &completion_timestamp);
+
+        // Send a response back to the client
+        send(conn_socket, &request_id, sizeof(request_id), 0);
+        send(conn_socket, &reserved_field, sizeof(reserved_field), 0);
+        send(conn_socket, &ack, sizeof(ack), 0);
+
+        // Log the request details in the specified format
+        printf("R%lu:%ld.%09ld,%ld.%09ld,%ld.%09ld,%ld.%09ld\n",
+               request_id,
+               sent_timestamp.tv_sec, sent_timestamp.tv_nsec,
+               request_length.tv_sec, request_length.tv_nsec,
+               receipt_timestamp.tv_sec, receipt_timestamp.tv_nsec,
+               completion_timestamp.tv_sec, completion_timestamp.tv_nsec);
+    }
+
+    // Close the connection
+    close(conn_socket);
 }
 
 /* Template implementation of the main function for the FIFO
