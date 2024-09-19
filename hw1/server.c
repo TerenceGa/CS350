@@ -82,7 +82,7 @@ void handle_connection(int conn_socket)
         }
 
         // Recording the receipt timestamp
-        if (clock_gettime(CLOCK_REALTIME, &ts_recv) == -1) {
+        if (clock_gettime(CLOCK_MONOTONIC, &ts_recv) == -1) {
             ERROR_INFO();
             perror("clock_gettime failed");
             break;
@@ -96,7 +96,7 @@ void handle_connection(int conn_socket)
         }
 
         // Recording the completion timestamp
-        if (clock_gettime(CLOCK_REALTIME, &ts_compli) == -1) {
+        if (clock_gettime(CLOCK_MONOTONIC, &ts_compli) == -1) {
             ERROR_INFO();
             perror("clock_gettime failed");
             break;
