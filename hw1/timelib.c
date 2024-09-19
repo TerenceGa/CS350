@@ -24,23 +24,51 @@
 *******************************************************************************/
 
 #include "timelib.h"
+#include "timelib.h"
+#include <errno.h>      // Added to define errno and EINTR
+
+
 
 /* Return the number of clock cycles elapsed when waiting for
  * wait_time seconds using sleeping functions */
 uint64_t get_elapsed_sleep(long sec, long nsec)
 {
-	uint64_t start, end;
-    /*struct timespec req, rem;
+    uint64_t start, end;
+    struct timespec req, rem;
 
+    /* Initialize the timespec structure with the requested sleep time */
     req.tv_sec = sec;
-    req.tv_nsec = nsec;*/
+    req.tv_nsec = nsec;
 
-	get_clocks(start);
-	get_clocks(end);
+    /* Normalize the timespec structure if nanoseconds >= 1,000,000,000 */
+    if (req.tv_nsec >= NANO_IN_SEC) {
+        req.tv_sec += req.tv_nsec / NANO_IN_SEC;
+        req.tv_nsec = req.tv_nsec % NANO_IN_SEC;
+    }
 
-	return(end - start);
+    /* Get the initial TSC value before sleeping */
+    get_clocks(start);
+
+
+    /* Attempt to sleep for the specified duration */
+    while (nanosleep(&req, &rem) == -1) {
+        if (errno == EINTR) {
+            /* If sleep was interrupted by a signal, continue sleeping for the remaining time */
+            req = rem;
+        } else {
+            /* For other errors, print an error message and return 0 */
+            perror("nanosleep failed");
+            return 0;
+        }
+    }
+
+    /* Get the TSC value after sleeping */
+    get_clocks(end);
+
+
+    /* Calculate and return the difference in clock cycles */
+    return (end - start);
 }
-
 /* Return the number of clock cycles elapsed when waiting for
  * wait_time seconds using busy-waiting functions */
 uint64_t get_elapsed_busywait(long sec, long nsec)

@@ -48,44 +48,91 @@
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
  * with the client is interrupted. */
-static void handle_connection(int conn_socket) {
-    while (1) {
-        // Structs to store request and response details
-        struct timespec sent_timestamp, request_length, receipt_timestamp, completion_timestamp;
-        uint64_t request_id, reserved_field = 0;
-        uint8_t ack = 0;
 
-        // Receive the request from the client
-        ssize_t bytes_received = recv(conn_socket, &request_id, sizeof(request_id), 0);
-        if (bytes_received <= 0) break; // Exit loop if no more data
 
-        recv(conn_socket, &sent_timestamp, sizeof(sent_timestamp), 0);
-        recv(conn_socket, &request_length, sizeof(request_length), 0);
+void handle_connection(int conn_socket)
+{	
+    struct timespec ts_recv;    // Timestamp of the last received request
+    struct timespec ts_compli;  // Timestamp of the last completed request
+    struct request req;         // Request received from the client
+    struct response resp;       // Response to be sent to the client
+    ssize_t result;             // Result of the send() function
+    ssize_t received;           // Result of the recv() function
 
-        // Get receipt timestamp (when the request was received)
-        clock_gettime(CLOCK_REALTIME, &receipt_timestamp);
+    while (1){
+        // Receiving the request
+        received = recv(conn_socket, &req, sizeof(req), 0);
+        if (received == 0) {
+            // Client has closed the connection
+            printf("INFO: Client disconnected (socket %d)\n", conn_socket);
+            break;
+        }
+        else if (received < 0) {
+            // Error in receiving data
+            ERROR_INFO();
+            perror("Error receiving data");
+            break;
+        }
+        else if (received != sizeof(req)) {
+            // Incomplete request received
+            ERROR_INFO();
+            fprintf(stderr, "Incomplete request received. Expected %zu bytes, got %zd bytes.\n",
+                    sizeof(req), received);
+            break;
+        }
 
-        // Perform a busy wait for the request length
-        get_elapsed_busywait(request_length.tv_sec, request_length.tv_nsec);
+        // Recording the receipt timestamp
+        if (clock_gettime(CLOCK_REALTIME, &ts_recv) == -1) {
+            ERROR_INFO();
+            perror("clock_gettime failed");
+            break;
+        }
 
-        // Get completion timestamp (after processing)
-        clock_gettime(CLOCK_REALTIME, &completion_timestamp);
+        // Performing busy wait as specified by the client
+        if (get_elapsed_busywait(req.request_length.tv_sec, req.request_length.tv_nsec) == -1) {
+            ERROR_INFO();
+            fprintf(stderr, "Busy wait failed\n");
+            break;
+        }
 
-        // Send a response back to the client
-        send(conn_socket, &request_id, sizeof(request_id), 0);
-        send(conn_socket, &reserved_field, sizeof(reserved_field), 0);
-        send(conn_socket, &ack, sizeof(ack), 0);
+        // Recording the completion timestamp
+        if (clock_gettime(CLOCK_REALTIME, &ts_compli) == -1) {
+            ERROR_INFO();
+            perror("clock_gettime failed");
+            break;
+        }
 
-        // Log the request details in the specified format
-        printf("R%lu:%ld.%09ld,%ld.%09ld,%ld.%09ld,%ld.%09ld\n",
-               request_id,
-               sent_timestamp.tv_sec, sent_timestamp.tv_nsec,
-               request_length.tv_sec, request_length.tv_nsec,
-               receipt_timestamp.tv_sec, receipt_timestamp.tv_nsec,
-               completion_timestamp.tv_sec, completion_timestamp.tv_nsec);
+        // Preparing the response
+        resp.request_id = req.request_id;
+        resp.reserved = 0;
+        resp.ack = 0;
+
+        // Sending the response back to the client
+        result = send(conn_socket, &resp, sizeof(resp), 0);
+        if (result < 0) {
+            // Error in sending data
+            ERROR_INFO();
+            perror("Error sending data");
+            break;
+        }
+        else if (result != sizeof(resp)) {
+            // Incomplete response sent
+            ERROR_INFO();
+            fprintf(stderr, "Incomplete response sent. Expected %zu bytes, sent %zd bytes.\n",
+                    sizeof(resp), result);
+            break;
+        }
+
+        // Logging the handled request in the specified format
+        printf("R%lu:%.6lf,%.6lf,%.6lf,%.6lf\n",
+               req.request_id,
+               TSPEC_TO_DOUBLE(req.sent_timestamp),
+               TSPEC_TO_DOUBLE(req.request_length),
+               TSPEC_TO_DOUBLE(ts_recv),
+               TSPEC_TO_DOUBLE(ts_compli));
     }
 
-    // Close the connection
+    // Closing the connection socket
     close(conn_socket);
 }
 
