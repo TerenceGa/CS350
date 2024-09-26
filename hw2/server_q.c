@@ -67,7 +67,7 @@ sem_t * queue_notify;
 #define QUEUE_SIZE 500
 
 struct queue {
-	struct m_req meta_requests[QUEUE_SIZE]; // Array of requests
+    struct meta_request meta_requests[QUEUE_SIZE]; // Array of meta_requests
     int front;      // Points to the front of the queue
     int rear;       // Points to the next insertion point
     int count;      // Number of elements in the queue
@@ -76,60 +76,63 @@ struct queue {
     sem_t queue_notify;  // Semaphore to notify worker threads
 };
 
+
 struct worker_params {
     /* IMPLEMENT ME */
 	int socket;
 	struct queue *the_queue;
 };
 
-/* Add a new request <request> to the shared queue <the_queue> */
-int add_to_queue(struct request to_add, struct queue * the_queue)
-{
-	int retval = 0;
-	/* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
-	sem_wait(queue_mutex);
-	/* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
-
-	/* WRITE YOUR CODE HERE! */
-	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
-	if (the_queue->count < QUEUE_SIZE) {
-		the_queue->requests[the_queue->rear] = to_add;
-		the_queue->rear = (the_queue->rear + 1) % QUEUE_SIZE;
-		the_queue->count++;
-		retval = 0;
-	} else {
-		retval = -1;
-	}
-	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-	sem_post(queue_mutex);
-	sem_post(queue_notify);
-	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
-	return retval;
+double timespec_to_seconds(struct timespec ts) {
+    return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
 /* Add a new request <request> to the shared queue <the_queue> */
-struct meta_request get_from_queue(struct queue * the_queue)
+int add_to_queue(struct meta_request to_add, struct queue *the_queue)
 {
-	struct request retval;
-	/* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
-	sem_wait(queue_notify);
-	sem_wait(queue_mutex);
-	/* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
+    int retval = 0;
+    /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
+    sem_wait(queue_mutex);
+    /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
 
-	/* WRITE YOUR CODE HERE! */
-	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
-	if (the_queue->count > 0) {
-		retval = the_queue->meta_request[the_queue->front];
-		the_queue->front = (the_queue->front + 1) % QUEUE_SIZE;
-		the_queue->count--;
-	} else {
-		retval = (struct meta_request){-1};
-	}
+    /* WRITE YOUR CODE HERE! */
+    /* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
+    if (the_queue->count < QUEUE_SIZE) {
+        the_queue->meta_requests[the_queue->rear] = to_add;
+        the_queue->rear = (the_queue->rear + 1) % QUEUE_SIZE;
+        the_queue->count++;
+        retval = 0;
+    } else {
+        retval = -1;
+    }
 
-	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-	sem_post(queue_mutex);
-	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
-	return retval;
+    /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
+    sem_post(queue_mutex);
+    sem_post(queue_notify);
+    /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
+    return retval;
+}
+
+
+/* Add a new request <request> to the shared queue <the_queue> */
+struct meta_request get_from_queue(struct queue *the_queue)
+{
+    struct meta_request retval;
+    /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
+    sem_wait(queue_notify);
+    sem_wait(queue_mutex);
+    /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
+
+    /* WRITE YOUR CODE HERE! */
+    /* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
+    retval = the_queue->meta_requests[the_queue->front];
+    the_queue->front = (the_queue->front + 1) % QUEUE_SIZE;
+    the_queue->count--;
+
+    /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
+    sem_post(queue_mutex);
+    /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
+    return retval;
 }
 
 /* Implement this method to correctly dump the status of the queue
@@ -163,16 +166,14 @@ void dump_queue_status(struct queue * the_queue)
 void *worker_main(void *arg) {
     struct worker_params *params = (struct worker_params *)arg;
     struct queue *the_queue = params->the_queue;
-    struct request req;
-	struct meta_request m_req;
-	
+    struct meta_request m_req;
 
     while (1) {
-        // Dequeue the next request
-        req = get_from_queue(the_queue);
+        // Dequeue the next meta_request
+        m_req = get_from_queue(the_queue);
 
         // Check for shutdown signal
-        if (req.request_id == -1) {
+        if (m_req.req.request_id == -1) {
             break;
         }
 
@@ -181,16 +182,16 @@ void *worker_main(void *arg) {
         clock_gettime(CLOCK_MONOTONIC, &start_time);
 
         // Process the request by performing a busywait
-        busywait(request.request_length);
+        busywait(m_req.req.request_length);
 
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
         // Print the report
         printf("R%d:%.6f,%.6f,%.6f,%.6f,%.6f\n",
-               req.request_id,
-               timespec_to_seconds(req.sent_timestamp),
-               req.request_length,
+               m_req.req.request_id,
+               timespec_to_seconds(m_req.req.sent_timestamp),
+               m_req.req.request_length,
                timespec_to_seconds(m_req.receipt_timestamp),
                timespec_to_seconds(start_time),
                timespec_to_seconds(completion_time));
@@ -203,77 +204,110 @@ void *worker_main(void *arg) {
     return NULL;
 }
 
-
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
  * with the client is interrupted. */
 void handle_connection(int conn_socket)
 {
-	struct request * req;
-	struct meta_request * m_req;
-	struct queue * the_queue;
-	struct worker_params *params;
-	size_t in_bytes;
+    struct request *req;
+    struct meta_request m_req;
+    struct queue *the_queue;
+    struct worker_params *params;
+    ssize_t in_bytes;
 
-	/* The connection with the client is alive here. Let's
-	 * initialize the shared queue. */
+    /* The connection with the client is alive here. Let's
+     * initialize the shared queue. */
 
-	/* IMPLEMENT HERE ANY QUEUE INITIALIZATION LOGIC */
-	the_queue = (struct queue *)malloc(sizeof(struct queue));
-	the_queue->front = 0;
+    /* IMPLEMENT HERE ANY QUEUE INITIALIZATION LOGIC */
+    the_queue = (struct queue *)malloc(sizeof(struct queue));
+    if (the_queue == NULL) {
+        perror("Failed to allocate memory for the_queue");
+        close(conn_socket);
+        return;
+    }
+    the_queue->front = 0;
     the_queue->rear = 0;
     the_queue->count = 0;
-	sem_init(&the_queue->queue_mutex, 0, 1);
-	sem_init(&the_queue->queue_notify, 0, 0);
+    sem_init(&the_queue->queue_mutex, 0, 1);
+    sem_init(&the_queue->queue_notify, 0, 0);
 
+    /* Queue ready to go here. Let's start the worker thread. */
 
-	/* Queue ready to go here. Let's start the worker thread. */
+    /* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
+    params = (struct worker_params *)malloc(sizeof(struct worker_params));
+    if (params == NULL) {
+        perror("Failed to allocate memory for worker_params");
+        free(the_queue);
+        close(conn_socket);
+        return;
+    }
+    params->the_queue = the_queue;
+    pthread_t worker_thread;
+    int ret = pthread_create(&worker_thread, NULL, worker_main, (void *)params);
+    if (ret != 0) {
+        fprintf(stderr, "Error: pthread_create() failed with code %d\n", ret);
+        free(params);
+        free(the_queue);
+        close(conn_socket);
+        return;
+    }
 
-	/* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
-	params = (struct worker_params *)malloc(sizeof(struct worker_params));
-	params->the_queue = the_queue;
-	pthread_t worker_thread;
-	int ret = pthread_create(&worker_thread, NULL, worker_main, (void *)params);
+    /* REUSE LOGIC FROM HW1 TO HANDLE THE PACKETS */
+    req = (struct request *)malloc(sizeof(struct request));
+    if (req == NULL) {
+        perror("Failed to allocate memory for req");
+        // Clean up and exit
+        free(params);
+        free(the_queue);
+        close(conn_socket);
+        return;
+    }
 
-	/* REUSE LOGIC FROM HW1 TO HANDLE THE PACKETS */
+    do {
+        // Receive the request from the client
+        in_bytes = recv(conn_socket, req, sizeof(struct request), 0);
 
-	req = (struct request *)malloc(sizeof(struct request));
+        /* SAMPLE receipt_timestamp HERE */
+        clock_gettime(CLOCK_MONOTONIC, &m_req.receipt_timestamp);
 
-	do {
-		//in_bytes = recv(conn_socket, ... /* IMPLEMENT ME */);
-		in_bytes = recv(conn_socket, req, sizeof(struct request), 0);
-		/* SAMPLE receipt_timestamp HERE */
-		clock_gettime(CLOCK_MONOTONIC, &receipt_timestamp);
-		/* Don't just return if in_bytes is 0 or -1. Instead
-		 * skip the response and break out of the loop in an
-		 * orderly fashion so that we can de-allocate the req
-		 * and resp varaibles, and shutdown the socket. */
-		if (in_bytes > 0) {
-			m_req.req = *req;
-			m_req.receipt_timestamp = req->receipt_timestamp;
-			add_to_queue(*req, the_queue);
-		}
-	} while (in_bytes > 0);
+        /* Don't just return if in_bytes is 0 or -1. Instead
+         * skip the response and break out of the loop in an
+         * orderly fashion so that we can de-allocate the req
+         * and resp variables, and shutdown the socket. */
+        if (in_bytes == sizeof(struct request)) {
+            m_req.req = *req;
+            add_to_queue(m_req, the_queue);
+        } else if (in_bytes == 0) {
+            // Connection closed
+            break;
+        } else if (in_bytes < 0) {
+            perror("recv failed");
+            break;
+        }
+    } while (in_bytes > 0);
 
-	/* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
-	struct request termination_req;
-    termination_req.request_id = -1;
+    /* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
+
+    /* Enqueue termination request */
+    struct meta_request termination_req;
+    termination_req.req.request_id = -1;
     add_to_queue(termination_req, the_queue);
-	/* Ask the worker thead to terminate */
-	/* ASSERT TERMINATION FLAG FOR THE WORKER THREAD */
 
-	/* Make sure to wake-up any thread left stuck waiting for items in the queue. DO NOT TOUCH */
-	sem_post(queue_notify);
+    /* Ask the worker thread to terminate */
+    /* ASSERT TERMINATION FLAG FOR THE WORKER THREAD */
 
-	/* Wait for orderly termination of the worker thread */	
-	/* ADD HERE LOGIC TO WAIT FOR TERMINATION OF WORKER */
-	pthread_join(worker_thread, NULL);
-	/* FREE UP DATA STRUCTURES AND SHUTDOWN CONNECTION WITH CLIENT */
-	sem_destroy(&the_queue->queue_mutex);
-	sem_destroy(&the_queue->queue_notify);
-	free(the_queue);
-	free(req);
-	close(conn_socket);
+    /* Make sure to wake-up any thread left stuck waiting for items in the queue. DO NOT TOUCH */
+    sem_post(queue_notify);
+
+    /* Wait for orderly termination of the worker thread */
+    pthread_join(worker_thread, NULL);
+
+    /* FREE UP DATA STRUCTURES AND SHUTDOWN CONNECTION WITH CLIENT */
+    sem_destroy(&the_queue->queue_mutex);
+    sem_destroy(&the_queue->queue_notify);
+    free(the_queue);
+    free(req);
+    close(conn_socket);
 }
 
 
