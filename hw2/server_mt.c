@@ -146,12 +146,7 @@ void handle_connection(int conn_socket)
             break;
         }
 
-        // Performing busy wait as specified by the client
-        if (get_elapsed_busywait(req.request_length.tv_sec, req.request_length.tv_nsec) == -1) {
-            ERROR_INFO();
-            fprintf(stderr, "Busy wait failed\n");
-            break;
-        }
+
 
         // Recording the completion timestamp
         if (clock_gettime(CLOCK_MONOTONIC, &ts_compli) == -1) {

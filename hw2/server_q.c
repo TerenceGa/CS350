@@ -67,11 +67,17 @@ sem_t * queue_notify;
 #define QUEUE_SIZE 500
 
 struct queue {
-    /* IMPLEMENT ME */
+	struct request requests[QUEUE_SIZE]; // Array of requests
+    int front;      // Points to the front of the queue
+    int rear;       // Points to the next insertion point
+    int count;      // Number of elements in the queue
+    sem_t queue_mutex;   // Semaphore acting as a mutex
+    sem_t queue_notify;  // Semaphore to notify worker threads
 };
 
 struct worker_params {
     /* IMPLEMENT ME */
+	struct queue *the_queue;
 };
 
 /* Add a new request <request> to the shared queue <the_queue> */
@@ -84,7 +90,14 @@ int add_to_queue(struct request to_add, struct queue * the_queue)
 
 	/* WRITE YOUR CODE HERE! */
 	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
-
+	if (the_queue->count < QUEUE_SIZE) {
+		the_queue->requests[the_queue->rear] = to_add;
+		the_queue->rear = (the_queue->rear + 1) % QUEUE_SIZE;
+		the_queue->count++;
+		retval = 0;
+	} else {
+		retval = -1;
+	}
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
 	sem_post(queue_mutex);
 	sem_post(queue_notify);
@@ -103,6 +116,13 @@ struct request get_from_queue(struct queue * the_queue)
 
 	/* WRITE YOUR CODE HERE! */
 	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
+	if (the_queue->count > 0) {
+		retval = the_queue->requests[the_queue->front];
+		the_queue->front = (the_queue->front + 1) % QUEUE_SIZE;
+		the_queue->count--;
+	} else {
+		retval = (struct request){-1};
+	}
 
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
 	sem_post(queue_mutex);
@@ -121,7 +141,15 @@ void dump_queue_status(struct queue * the_queue)
 
 	/* WRITE YOUR CODE HERE! */
 	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
-
+	printf("Q:[");
+    for (i = 0; i < the_queue->count; i++) {
+        int index = (the_queue->front + i) % QUEUE_SIZE;
+        printf("R%d", the_queue->requests[index].request_id);
+        if (i != the_queue->count - 1) {
+            printf(",");
+        }
+    }
+    printf("]\n");
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
 	sem_post(queue_mutex);
 	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
@@ -130,6 +158,47 @@ void dump_queue_status(struct queue * the_queue)
 
 /* Main logic of the worker thread */
 /* IMPLEMENT HERE THE MAIN FUNCTION OF THE WORKER */
+void *worker_main(void *arg) {
+    struct worker_params *params = (struct worker_params *)arg;
+    struct queue *the_queue = params->the_queue;
+    struct request req;
+
+    while (1) {
+        // Dequeue the next request
+        req = get_from_queue(the_queue);
+
+        // Check for shutdown signal
+        if (req.request_id == -1) {
+            break;
+        }
+
+        // Record start timestamp
+        struct timespec start_time, completion_time;
+        clock_gettime(CLOCK_MONOTONIC, &start_time);
+
+        // Process the request by performing a busywait
+        busywait(req.process_time);
+
+        // Record completion timestamp
+        clock_gettime(CLOCK_MONOTONIC, &completion_time);
+
+        // Print the report
+        printf("R%d:%.6f,%.6f,%.6f,%.6f,%.6f\n",
+               req.request_id,
+               timespec_to_seconds(req.sent_timestamp),
+               req.process_time,
+               timespec_to_seconds(req.receipt_timestamp),
+               timespec_to_seconds(start_time),
+               timespec_to_seconds(completion_time));
+
+        // Dump queue status
+        dump_queue_status(the_queue);
+    }
+
+    free(params);
+    return NULL;
+}
+
 
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
@@ -138,19 +207,28 @@ void handle_connection(int conn_socket)
 {
 	struct request * req;
 	struct queue * the_queue;
+	struct worker_params *params;
 	size_t in_bytes;
 
 	/* The connection with the client is alive here. Let's
 	 * initialize the shared queue. */
 
 	/* IMPLEMENT HERE ANY QUEUE INITIALIZATION LOGIC */
+	the_queue = (struct queue *)malloc(sizeof(struct queue));
+	the_queue->front = 0;
+    the_queue->rear = 0;
+    the_queue->count = 0;
+	sem_init(&the_queue->queue_mutex, 0, 1);
+	sem_init(&the_queue->queue_notify, 0, 0);
+
 
 	/* Queue ready to go here. Let's start the worker thread. */
 
 	/* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
-
-	/* We are ready to proceed with the rest of the request
-	 * handling logic. */
+	params = (struct worker_params *)malloc(sizeof(struct worker_params));
+	params->the_queue = the_queue;
+	pthread_t worker_thread;
+	int ret = pthread_create(&worker_thread, NULL, worker_main, (void *)params);
 
 	/* REUSE LOGIC FROM HW1 TO HANDLE THE PACKETS */
 
@@ -158,8 +236,9 @@ void handle_connection(int conn_socket)
 
 	do {
 		//in_bytes = recv(conn_socket, ... /* IMPLEMENT ME */);
+		in_bytes = recv(conn_socket, req, sizeof(struct request), 0);
 		/* SAMPLE receipt_timestamp HERE */
-
+		clock_gettime(CLOCK_MONOTONIC, &req->receipt_timestamp);
 		/* Don't just return if in_bytes is 0 or -1. Instead
 		 * skip the response and break out of the loop in an
 		 * orderly fashion so that we can de-allocate the req
@@ -170,17 +249,24 @@ void handle_connection(int conn_socket)
 	} while (in_bytes > 0);
 
 	/* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
-	
+	struct request termination_req;
+    termination_req.request_id = -1;
+    add_to_queue(termination_req, the_queue);
 	/* Ask the worker thead to terminate */
 	/* ASSERT TERMINATION FLAG FOR THE WORKER THREAD */
-	
+
 	/* Make sure to wake-up any thread left stuck waiting for items in the queue. DO NOT TOUCH */
 	sem_post(queue_notify);
 
 	/* Wait for orderly termination of the worker thread */	
 	/* ADD HERE LOGIC TO WAIT FOR TERMINATION OF WORKER */
-	
+	pthread_join(worker_thread, NULL);
 	/* FREE UP DATA STRUCTURES AND SHUTDOWN CONNECTION WITH CLIENT */
+	sem_destroy(&the_queue->queue_mutex);
+	sem_destroy(&the_queue->queue_notify);
+	free(the_queue);
+	free(req);
+	close(conn_socket);
 }
 
 
