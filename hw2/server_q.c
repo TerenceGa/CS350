@@ -311,7 +311,10 @@ void handle_connection(int conn_socket)
     sem_post(queue_notify);
 
     /* Wait for orderly termination of the worker thread */
-    pthread_join(worker_thread, NULL);
+    if (pthread_join(worker_thread, NULL) != 0) {
+        perror("pthread_join failed");
+        return;
+    }
 
     /* FREE UP DATA STRUCTURES AND SHUTDOWN CONNECTION WITH CLIENT */
     sem_destroy(&the_queue->queue_mutex);
