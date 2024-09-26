@@ -162,6 +162,7 @@ void *worker_main(void *arg) {
     struct worker_params *params = (struct worker_params *)arg;
     struct queue *the_queue = params->the_queue;
     struct request req;
+	
 
     while (1) {
         // Dequeue the next request
@@ -177,7 +178,7 @@ void *worker_main(void *arg) {
         clock_gettime(CLOCK_MONOTONIC, &start_time);
 
         // Process the request by performing a busywait
-        busywait(req.process_time);
+        busywait(request.request_length);
 
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
@@ -186,7 +187,7 @@ void *worker_main(void *arg) {
         printf("R%d:%.6f,%.6f,%.6f,%.6f,%.6f\n",
                req.request_id,
                timespec_to_seconds(req.sent_timestamp),
-               req.process_time,
+               req.request_length,
                timespec_to_seconds(req.receipt_timestamp),
                timespec_to_seconds(start_time),
                timespec_to_seconds(completion_time));
