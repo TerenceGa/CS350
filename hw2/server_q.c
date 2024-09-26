@@ -165,44 +165,49 @@ void dump_queue_status(struct queue *the_queue)
 
 /* Main logic of the worker thread */
 /* IMPLEMENT HERE THE MAIN FUNCTION OF THE WORKER */
+// Declare the busywait function
+void busywait(struct timespec duration);
+
+// Implement the busywait function
+void busywait(struct timespec duration) {
+    struct timespec start, current;
+    double start_time, current_time, wait_time;
+
+    wait_time = duration.tv_sec + duration.tv_nsec / 1e9;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    start_time = start.tv_sec + start.tv_nsec / 1e9;
+
+    do {
+        clock_gettime(CLOCK_MONOTONIC, &current);
+        current_time = current.tv_sec + current.tv_nsec / 1e9;
+    } while ((current_time - start_time) < wait_time);
+}
+
+// Worker thread main function
 void *worker_main(void *arg) {
-    struct worker_params *params = (struct worker_params *)arg;
-    struct queue *the_queue = params->the_queue;
-    struct meta_request m_req;
+    struct timespec ts;
+    double timestamp;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    timestamp = ts.tv_sec + ts.tv_nsec / 1e9;
+
+    printf("[#WORKER#] %.6f Worker Thread Alive!\n", timestamp);
 
     while (1) {
-        // Dequeue the next meta_request
-        m_req = get_from_queue(the_queue);
+        // Busywait for 1 second
+        struct timespec duration = { .tv_sec = 1, .tv_nsec = 0 };
+        busywait(duration);
 
-        // Check for shutdown signal
-        if (m_req.req.request_id == -1) {
-            break;
-        }
+        // Print "Still Alive!" message
+        clock_gettime(CLOCK_REALTIME, &ts);
+        timestamp = ts.tv_sec + ts.tv_nsec / 1e9;
+        printf("[#WORKER#] %.6f Still Alive!\n", timestamp);
 
-        // Record start timestamp
-        struct timespec start_time, completion_time;
-        clock_gettime(CLOCK_MONOTONIC, &start_time);
-
-        // Process the request by performing a busywait
-        busywait(m_req.req.request_length);
-
-        // Record completion timestamp
-        clock_gettime(CLOCK_MONOTONIC, &completion_time);
-
-        // Print the report
-        printf("R%d:%.6f,%.6f,%.6f,%.6f,%.6f\n",
-               m_req.req.request_id,
-               timespec_to_seconds(m_req.req.sent_timestamp),
-               m_req.req.request_length,
-               timespec_to_seconds(m_req.receipt_timestamp),
-               timespec_to_seconds(start_time),
-               timespec_to_seconds(completion_time));
-
-        // Dump queue status
-        dump_queue_status(the_queue);
+        // Sleep for 1 second
+        sleep(1);
     }
 
-    free(params);
     return NULL;
 }
 
