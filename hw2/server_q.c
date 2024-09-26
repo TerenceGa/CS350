@@ -45,7 +45,7 @@
 
 /* Needed for semaphores */
 #include <semaphore.h>
-
+#include <pthread.h>
 /* Include struct definitions and other libraries that need to be
  * included by both client and server */
 #include "common.h"
@@ -250,10 +250,7 @@ void handle_connection(int conn_socket)
     }
     params->the_queue = the_queue;
     pthread_t worker_thread;
-    int pthread_create(pthread_t *thread, 
-                   const pthread_attr_t *attr,
-                   void *(*start_routine) (void *), 
-                   void *arg);
+
     int ret = pthread_create(&worker_thread, NULL, worker_main, (void *)params);
     if (ret != 0) {
         fprintf(stderr, "Error: pthread_create() failed with code %d\n", ret);
