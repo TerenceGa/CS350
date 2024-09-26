@@ -137,28 +137,30 @@ struct meta_request get_from_queue(struct queue *the_queue)
 
 /* Implement this method to correctly dump the status of the queue
  * following the format Q:[R<request ID>,R<request ID>,...] */
-void dump_queue_status(struct queue * the_queue)
+void dump_queue_status(struct queue *the_queue)
 {
-	int i;
-	/* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
-	sem_wait(queue_mutex);
-	/* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
+    int i;
+    /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
+    sem_wait(queue_mutex);
+    /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
 
-	/* WRITE YOUR CODE HERE! */
-	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
-	printf("Q:[");
+    /* WRITE YOUR CODE HERE! */
+    /* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
+    printf("Q:[");
     for (i = 0; i < the_queue->count; i++) {
         int index = (the_queue->front + i) % QUEUE_SIZE;
-        printf("R%d", the_queue->requests[index].request_id);
+        printf("R%d", the_queue->meta_requests[index].req.request_id);
         if (i != the_queue->count - 1) {
             printf(",");
         }
     }
     printf("]\n");
-	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-	sem_post(queue_mutex);
-	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
+
+    /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
+    sem_post(queue_mutex);
+    /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
 }
+
 
 
 /* Main logic of the worker thread */
