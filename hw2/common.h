@@ -38,7 +38,7 @@ struct request {
 };
 struct meta_request {
     struct request req;
-    struct sockaddr_in client;
+    struct timespec receipt_timestamp;
 };
 
 /* Response payload as sent by the server and received by the
