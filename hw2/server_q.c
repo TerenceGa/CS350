@@ -166,14 +166,9 @@ void dump_queue_status(struct queue *the_queue)
 /* Main logic of the worker thread */
 /* IMPLEMENT HERE THE MAIN FUNCTION OF THE WORKER */
 // Declare the busywait function
-void busywait(struct timespec duration);
-
-// Implement the busywait function
-void busywait(struct timespec duration) {
+void busywait(double duration) {
     struct timespec start, current;
-    double start_time, current_time, wait_time;
-
-    wait_time = duration.tv_sec + duration.tv_nsec / 1e9;
+    double start_time, current_time;
 
     clock_gettime(CLOCK_MONOTONIC, &start);
     start_time = start.tv_sec + start.tv_nsec / 1e9;
@@ -181,7 +176,7 @@ void busywait(struct timespec duration) {
     do {
         clock_gettime(CLOCK_MONOTONIC, &current);
         current_time = current.tv_sec + current.tv_nsec / 1e9;
-    } while ((current_time - start_time) < wait_time);
+    } while ((current_time - start_time) < duration);
 }
 
 // Worker thread main function
@@ -312,7 +307,7 @@ void handle_connection(int conn_socket)
     /* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
 
     /* Enqueue termination request */
-    struct meta_request termination_req;
+    struct meta_request termination_req = {0}; // Zero-initialize the struct
     termination_req.req.request_id = -1;
     add_to_queue(termination_req, the_queue);
 
