@@ -67,16 +67,18 @@ sem_t * queue_notify;
 #define QUEUE_SIZE 500
 
 struct queue {
-	struct request requests[QUEUE_SIZE]; // Array of requests
+	struct m_req meta_requests[QUEUE_SIZE]; // Array of requests
     int front;      // Points to the front of the queue
     int rear;       // Points to the next insertion point
     int count;      // Number of elements in the queue
+
     sem_t queue_mutex;   // Semaphore acting as a mutex
     sem_t queue_notify;  // Semaphore to notify worker threads
 };
 
 struct worker_params {
     /* IMPLEMENT ME */
+	int socket;
 	struct queue *the_queue;
 };
 
@@ -106,7 +108,7 @@ int add_to_queue(struct request to_add, struct queue * the_queue)
 }
 
 /* Add a new request <request> to the shared queue <the_queue> */
-struct request get_from_queue(struct queue * the_queue)
+struct meta_request get_from_queue(struct queue * the_queue)
 {
 	struct request retval;
 	/* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
@@ -117,11 +119,11 @@ struct request get_from_queue(struct queue * the_queue)
 	/* WRITE YOUR CODE HERE! */
 	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
 	if (the_queue->count > 0) {
-		retval = the_queue->requests[the_queue->front];
+		retval = the_queue->meta_request[the_queue->front];
 		the_queue->front = (the_queue->front + 1) % QUEUE_SIZE;
 		the_queue->count--;
 	} else {
-		retval = (struct request){-1};
+		retval = (struct meta_request){-1};
 	}
 
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
@@ -162,6 +164,7 @@ void *worker_main(void *arg) {
     struct worker_params *params = (struct worker_params *)arg;
     struct queue *the_queue = params->the_queue;
     struct request req;
+	struct meta_request m_req;
 	
 
     while (1) {
@@ -188,7 +191,7 @@ void *worker_main(void *arg) {
                req.request_id,
                timespec_to_seconds(req.sent_timestamp),
                req.request_length,
-               timespec_to_seconds(req.receipt_timestamp),
+               timespec_to_seconds(m_req.receipt_timestamp),
                timespec_to_seconds(start_time),
                timespec_to_seconds(completion_time));
 
@@ -207,6 +210,7 @@ void *worker_main(void *arg) {
 void handle_connection(int conn_socket)
 {
 	struct request * req;
+	struct meta_request * m_req;
 	struct queue * the_queue;
 	struct worker_params *params;
 	size_t in_bytes;
@@ -239,12 +243,14 @@ void handle_connection(int conn_socket)
 		//in_bytes = recv(conn_socket, ... /* IMPLEMENT ME */);
 		in_bytes = recv(conn_socket, req, sizeof(struct request), 0);
 		/* SAMPLE receipt_timestamp HERE */
-		clock_gettime(CLOCK_MONOTONIC, &req->receipt_timestamp);
+		clock_gettime(CLOCK_MONOTONIC, &receipt_timestamp);
 		/* Don't just return if in_bytes is 0 or -1. Instead
 		 * skip the response and break out of the loop in an
 		 * orderly fashion so that we can de-allocate the req
 		 * and resp varaibles, and shutdown the socket. */
 		if (in_bytes > 0) {
+			m_req.req = *req;
+			m_req.receipt_timestamp = req->receipt_timestamp;
 			add_to_queue(*req, the_queue);
 		}
 	} while (in_bytes > 0);

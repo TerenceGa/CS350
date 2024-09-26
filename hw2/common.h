@@ -34,6 +34,11 @@ struct request {
 	uint64_t request_id;
     struct timespec sent_timestamp;
     struct timespec request_length;
+
+};
+struct meta_request {
+    struct request req;
+    struct sockaddr_in client;
 };
 
 /* Response payload as sent by the server and received by the
