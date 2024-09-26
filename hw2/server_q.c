@@ -180,9 +180,14 @@ void busywait(struct timespec duration) {
         end.tv_sec += end.tv_nsec / (long)1e9;
         end.tv_nsec = end.tv_nsec % (long)1e9;
     }
+    int i = 5;
 
     do {
         clock_gettime(CLOCK_MONOTONIC, &current);
+        if i > 0 {
+            printf("Busywait\n");
+            i --;
+        }
         if ((current.tv_sec > end.tv_sec) ||
             (current.tv_sec == end.tv_sec && current.tv_nsec >= end.tv_nsec)) {
             break;
