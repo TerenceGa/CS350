@@ -71,7 +71,7 @@ struct queue {
     int front;      // Points to the front of the queue
     int rear;       // Points to the next insertion point
     int count;      // Number of elements in the queue
-
+    
     sem_t queue_mutex;   // Semaphore acting as a mutex
     sem_t queue_notify;  // Semaphore to notify worker threads
 };
@@ -200,6 +200,8 @@ void *worker_main(void *arg) {
     struct worker_params *params = (struct worker_params *)arg;
     struct queue *the_queue = params->the_queue;
     struct meta_request m_req;
+    int conn_socket = params->socket;  // Get the socket descriptor
+    struct response resp;
 
     while (1) {
         // Dequeue the next meta_request
@@ -207,6 +209,7 @@ void *worker_main(void *arg) {
 
         // Check for shutdown signal
         if (m_req.req.request_id == -1) {
+            printf("INFO: Worker thread terminating...\n");
             break;
         }
 
@@ -220,11 +223,23 @@ void *worker_main(void *arg) {
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
+        // Prepare the response
+        resp.request_id = m_req.req.request_id;
+        resp.reserved = 0;
+        resp.ack = 1;  // Indicate successful processing
+
+        // Send the response back to the client
+        ssize_t out_bytes = send(conn_socket, &resp, sizeof(struct response), 0);
+        if (out_bytes != sizeof(struct response)) {
+            perror("send failed");
+            // Handle error if necessary
+        }
+
         // Print the report
         printf("R%d:%.6f,%.6f,%.6f,%.6f,%.6f\n",
                m_req.req.request_id,
                timespec_to_seconds(m_req.req.sent_timestamp),
-               m_req.req.request_length,
+               timespec_to_seconds(m_req.req.request_length),
                timespec_to_seconds(m_req.receipt_timestamp),
                timespec_to_seconds(start_time),
                timespec_to_seconds(completion_time));
@@ -233,6 +248,7 @@ void *worker_main(void *arg) {
         dump_queue_status(the_queue);
     }
 
+    // Clean up and exit the thread
     free(params);
     return NULL;
 }
@@ -298,8 +314,10 @@ void handle_connection(int conn_socket)
     }
 
     do {
+        printf("INFO: Waiting for Receiving request...\n");
         // Receive the request from the client
         in_bytes = recv(conn_socket, req, sizeof(struct request), 0);
+        printf("INFO: Received request\n"+in_bytes);
 
         /* SAMPLE receipt_timestamp HERE */
         clock_gettime(CLOCK_MONOTONIC, &m_req.receipt_timestamp);
@@ -318,6 +336,7 @@ void handle_connection(int conn_socket)
             perror("recv failed");
             break;
         }
+
     } while (in_bytes > 0);
 
     /* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
