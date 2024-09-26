@@ -93,46 +93,32 @@ void *worker_main(void *arg) {
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
  * with the client is interrupted. */
-void handle_connection(int conn_socket)
-{
-
-	/* The connection with the client is alive here. Let's start
-	 * the worker thread. */
-
-	/* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
-	int pthread_create(pthread_t *thread, 
-                   const pthread_attr_t *attr,
-                   void *(*start_routine) (void *), 
-                   void *arg);
-	pthread_t worker_thread;
+void handle_connection(int conn_socket) {
+    // Start the worker thread
+    pthread_t worker_thread;
     int ret = pthread_create(&worker_thread, NULL, worker_main, NULL);
-	/* We are ready to proceed with the rest of the request
-	 * handling logic. */
+    if (ret != 0) {
+        ERROR_INFO();
+        fprintf(stderr, "Failed to create worker thread: %s\n", strerror(ret));
+        // Handle error as appropriate
+    }
 
-	/* REUSE LOGIC FROM HW1 TO HANDLE THE PACKETS */
-    struct timespec ts_recv;    // Timestamp of the last received request
-    struct timespec ts_compli;  // Timestamp of the last completed request
-    struct request req;         // Request received from the client
-    struct response resp;       // Response to be sent to the client
-    ssize_t result;             // Result of the send() function
-    ssize_t received;           // Result of the recv() function
+    struct timespec ts_recv, ts_compli, ts_start, ts_now;
+    struct request req;
+    struct response resp;
+    ssize_t result, received;
 
-    while (1){
+    while (1) {
         // Receiving the request
         received = recv(conn_socket, &req, sizeof(req), 0);
         if (received == 0) {
-            // Client has closed the connection
             printf("INFO: Client disconnected (socket %d)\n", conn_socket);
             break;
-        }
-        else if (received < 0) {
-            // Error in receiving data
+        } else if (received < 0) {
             ERROR_INFO();
             perror("Error receiving data");
             break;
-        }
-        else if (received != sizeof(req)) {
-            // Incomplete request received
+        } else if (received != sizeof(req)) {
             ERROR_INFO();
             fprintf(stderr, "Incomplete request received. Expected %zu bytes, got %zd bytes.\n",
                     sizeof(req), received);
@@ -146,7 +132,17 @@ void handle_connection(int conn_socket)
             break;
         }
 
-
+        // Busywait for the request length
+        double process_duration = TSPEC_TO_DOUBLE(req.request_length);
+        clock_gettime(CLOCK_MONOTONIC, &ts_start);
+        while (1) {
+            clock_gettime(CLOCK_MONOTONIC, &ts_now);
+            double elapsed = (ts_now.tv_sec - ts_start.tv_sec) +
+                             (ts_now.tv_nsec - ts_start.tv_nsec) / 1e9;
+            if (elapsed >= process_duration) {
+                break;
+            }
+        }
 
         // Recording the completion timestamp
         if (clock_gettime(CLOCK_MONOTONIC, &ts_compli) == -1) {
@@ -163,20 +159,17 @@ void handle_connection(int conn_socket)
         // Sending the response back to the client
         result = send(conn_socket, &resp, sizeof(resp), 0);
         if (result < 0) {
-            // Error in sending data
             ERROR_INFO();
             perror("Error sending data");
             break;
-        }
-        else if (result != sizeof(resp)) {
-            // Incomplete response sent
+        } else if (result != sizeof(resp)) {
             ERROR_INFO();
             fprintf(stderr, "Incomplete response sent. Expected %zu bytes, sent %zd bytes.\n",
                     sizeof(resp), result);
             break;
         }
 
-        // Logging the handled request in the specified format
+        // Logging the handled request
         printf("R%lu:%.6lf,%.6lf,%.6lf,%.6lf\n",
                req.request_id,
                TSPEC_TO_DOUBLE(req.sent_timestamp),
@@ -185,10 +178,10 @@ void handle_connection(int conn_socket)
                TSPEC_TO_DOUBLE(ts_compli));
     }
 
-    // Closing the connection socket
+    // Clean up
     close(conn_socket);
-	
 }
+
 
 
 /* Template implementation of the main function for the FIFO
