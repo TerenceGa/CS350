@@ -228,7 +228,7 @@ void *worker_main(void *arg) {
         res.ack = 0;
         printf("INFO: Sending response to client...\n");
         // Sending the response back to the client
-        send(conn_socket, &res, sizeof(res), 0);
+        send(params->conn_socket, &res, sizeof(res), 0);
         
         printf("INFO: Response sent on socket %d\n", conn_socket);
         // Record completion timestamp
@@ -285,7 +285,7 @@ void handle_connection(int conn_socket)
     sem_init(&the_queue->queue_notify, 0, 0);
 
     /* Queue ready to go here. Let's start the worker thread. */
-
+    worker_params.socket = conn_socket;
     /* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
     params = (struct worker_params *)malloc(sizeof(struct worker_params));
     if (params == NULL) {
