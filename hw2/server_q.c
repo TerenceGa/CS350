@@ -220,12 +220,12 @@ void *worker_main(void *arg) {
 
         // sending back to client
         // Preparing the response
-        resp.request_id = req.request_id;
-        resp.reserved = 0;
-        resp.ack = 0;
+        res.request_id = m_req.req.request_id;
+        res.reserved = 0;
+        res.ack = 0;
 
         // Sending the response back to the client
-        result = send(conn_socket, &resp, sizeof(resp), 0);
+        send(conn_socket, &resp, sizeof(resp), 0);
         if (result < 0) {
             ERROR_INFO();
             perror("Error sending data");
@@ -236,7 +236,7 @@ void *worker_main(void *arg) {
                     sizeof(resp), result);
             break;
         }
-        
+
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
