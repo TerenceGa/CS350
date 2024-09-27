@@ -71,7 +71,8 @@ struct queue {
     int front;      // Points to the front of the queue
     int rear;       // Points to the next insertion point
     int count;      // Number of elements in the queue
-    
+    volatile int termination_flag; // Flag to signal termination
+
     sem_t queue_mutex;   // Semaphore acting as a mutex
     sem_t queue_notify;  // Semaphore to notify worker threads
 };
@@ -91,9 +92,11 @@ double timespec_to_seconds(struct timespec ts) {
 int add_to_queue(struct meta_request to_add, struct queue *the_queue)
 {
     int retval = 0;
+    printf("INFO: Adding request to queue...\n");
     /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
     sem_wait(queue_mutex);
     /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
+    printf("INFO: finish Adding request to queue...\n");
 
     /* WRITE YOUR CODE HERE! */
     /* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
@@ -227,7 +230,7 @@ void *worker_main(void *arg) {
         // Sending the response back to the client
         send(conn_socket, &res, sizeof(res), 0);
         
-        printf("INFO: Response sent\n", conn_socket);
+        printf("INFO: Response sent on socket %d\n", conn_socket);
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
