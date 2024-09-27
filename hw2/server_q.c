@@ -223,27 +223,15 @@ void *worker_main(void *arg) {
         res.request_id = m_req.req.request_id;
         res.reserved = 0;
         res.ack = 0;
-
+        printf("INFO: Sending response to client...\n");
         // Sending the response back to the client
-        send(conn_socket, &resp, sizeof(resp), 0);
-        if (result < 0) {
-            ERROR_INFO();
-            perror("Error sending data");
-            break;
-        } else if (result != sizeof(resp)) {
-            ERROR_INFO();
-            fprintf(stderr, "Incomplete response sent. Expected %zu bytes, sent %zd bytes.\n",
-                    sizeof(resp), result);
-            break;
-        }
-
+        send(conn_socket, &res, sizeof(res), 0);
+        
+        printf("INFO: Response sent\n");
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
         // Prepare the response
-        resp.request_id = m_req.req.request_id;
-        resp.reserved = 0;
-        resp.ack = 1;  // Indicate successful processing
 
         // Send the response back to the client
 
@@ -326,6 +314,7 @@ void handle_connection(int conn_socket)
         return;
     }
 
+
     do {
         printf("INFO: Waiting for Receiving request...\n");
         // Receive the request from the client
@@ -350,7 +339,7 @@ void handle_connection(int conn_socket)
             break;
         }
 
-    } while (in_bytes > 0);
+    } while (in_bytes != 0);
 
     /* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
 
