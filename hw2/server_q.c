@@ -180,14 +180,10 @@ void busywait(struct timespec duration) {
         end.tv_sec += end.tv_nsec / (long)1e9;
         end.tv_nsec = end.tv_nsec % (long)1e9;
     }
-    int i = 10;
+
 
     do {
         clock_gettime(CLOCK_MONOTONIC, &current);
-        if i < 0 {
-            printf("busywait error\n");
-        }
-        i --;
         
         if ((current.tv_sec > end.tv_sec) ||
             (current.tv_sec == end.tv_sec && current.tv_nsec >= end.tv_nsec)) {
@@ -202,6 +198,10 @@ void *worker_main(void *arg) {
     struct meta_request m_req;
     int conn_socket = params->socket;  // Get the socket descriptor
     struct response resp;
+    int conn_socket = params->socket;
+    struct response res;
+    ssize_t out_bytes;
+
 
     while (1) {
         // Dequeue the next meta_request
@@ -220,6 +220,9 @@ void *worker_main(void *arg) {
         // Process the request by performing a busywait
         busywait(m_req.req.request_length);
 
+        // sending back to client
+        res.request_id = m_req.req.request_id;
+        res.reserved = 0;
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
@@ -229,11 +232,7 @@ void *worker_main(void *arg) {
         resp.ack = 1;  // Indicate successful processing
 
         // Send the response back to the client
-        ssize_t out_bytes = send(conn_socket, &resp, sizeof(struct response), 0);
-        if (out_bytes != sizeof(struct response)) {
-            perror("send failed");
-            // Handle error if necessary
-        }
+
 
         // Print the report
         printf("R%d:%.6f,%.6f,%.6f,%.6f,%.6f\n",
