@@ -289,22 +289,12 @@ void handle_connection(int conn_socket)
         return;
     }
     params->the_queue = the_queue;
+    params->socket = conn_socket;  // **Set the socket descriptor here**
     pthread_t worker_thread;
 
     int ret = pthread_create(&worker_thread, NULL, worker_main, (void *)params);
     if (ret != 0) {
         fprintf(stderr, "Error: pthread_create() failed with code %d\n", ret);
-        free(params);
-        free(the_queue);
-        close(conn_socket);
-        return;
-    }
-
-    /* REUSE LOGIC FROM HW1 TO HANDLE THE PACKETS */
-    req = (struct request *)malloc(sizeof(struct request));
-    if (req == NULL) {
-        perror("Failed to allocate memory for req");
-        // Clean up and exit
         free(params);
         free(the_queue);
         close(conn_socket);
