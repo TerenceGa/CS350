@@ -197,7 +197,6 @@ void *worker_main(void *arg) {
     struct queue *the_queue = params->the_queue;
     struct meta_request m_req;
     int conn_socket = params->socket;  // Get the socket descriptor
-    struct response resp;
     struct response res;
     ssize_t out_bytes;
 
@@ -220,18 +219,24 @@ void *worker_main(void *arg) {
         busywait(m_req.req.request_length);
 
         // sending back to client
-        res.request_id = m_req.req.request_id;
-        res.reserved = 0;
-        res.ack = 1;
-        out_bytes = send(conn_socket, &res, sizeof(res), 0);
-        if (out_bytes < 0) {
-            perror("send failed");
+        // Preparing the response
+        resp.request_id = req.request_id;
+        resp.reserved = 0;
+        resp.ack = 0;
+
+        // Sending the response back to the client
+        result = send(conn_socket, &resp, sizeof(resp), 0);
+        if (result < 0) {
+            ERROR_INFO();
+            perror("Error sending data");
             break;
-        } else if (out_bytes != sizeof(res)) {
+        } else if (result != sizeof(resp)) {
+            ERROR_INFO();
             fprintf(stderr, "Incomplete response sent. Expected %zu bytes, sent %zd bytes.\n",
-                    sizeof(res), out_bytes);
+                    sizeof(resp), result);
             break;
         }
+        
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
