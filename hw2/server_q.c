@@ -198,7 +198,6 @@ void *worker_main(void *arg) {
     struct meta_request m_req;
     int conn_socket = params->socket;  // Get the socket descriptor
     struct response resp;
-    int conn_socket = params->socket;
     struct response res;
     ssize_t out_bytes;
 
@@ -223,6 +222,16 @@ void *worker_main(void *arg) {
         // sending back to client
         res.request_id = m_req.req.request_id;
         res.reserved = 0;
+        res.ack = 1;
+        out_bytes = send(conn_socket, &res, sizeof(res), 0);
+        if (out_bytes < 0) {
+            perror("send failed");
+            break;
+        } else if (out_bytes != sizeof(res)) {
+            fprintf(stderr, "Incomplete response sent. Expected %zu bytes, sent %zd bytes.\n",
+                    sizeof(res), out_bytes);
+            break;
+        }
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
