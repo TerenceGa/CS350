@@ -195,6 +195,7 @@ void busywait(struct timespec duration) {
     } while (1);
 }
 
+int termination_flag = 0;
 void *worker_main(void *arg) {
     struct worker_params *params = (struct worker_params *)arg;
     struct queue *the_queue = params->the_queue;
@@ -204,15 +205,11 @@ void *worker_main(void *arg) {
     ssize_t out_bytes;
 
 
-    while (1) {
+    while (termination_flag != 1) {
         // Dequeue the next meta_request
         m_req = get_from_queue(the_queue);
 
         // Check for shutdown signal
-        if (m_req.req.request_id == -1) {
-            printf("INFO: Worker thread terminating...\n");
-            break;
-        }
 
         // Record start timestamp
         struct timespec start_time, completion_time;
@@ -228,7 +225,7 @@ void *worker_main(void *arg) {
         res.ack = 0;
         printf("INFO: Sending response to client...\n");
         // Sending the response back to the client
-        send(params->conn_socket, &res, sizeof(res), 0);
+        send(conn_socket, &res, sizeof(res), 0);
         
         printf("INFO: Response sent on socket %d\n", conn_socket);
         // Record completion timestamp
@@ -266,6 +263,7 @@ void handle_connection(int conn_socket)
     struct meta_request m_req;
     struct queue *the_queue;
     struct worker_params *params;
+    
     ssize_t in_bytes;
 
     /* The connection with the client is alive here. Let's
@@ -285,7 +283,7 @@ void handle_connection(int conn_socket)
     sem_init(&the_queue->queue_notify, 0, 0);
 
     /* Queue ready to go here. Let's start the worker thread. */
-    worker_params.socket = conn_socket;
+    params.socket = conn_socket;
     /* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
     params = (struct worker_params *)malloc(sizeof(struct worker_params));
     if (params == NULL) {
@@ -346,11 +344,10 @@ void handle_connection(int conn_socket)
     } while (in_bytes != 0);
 
     /* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
-
+    free (req);
+    free (m_req);
     /* Enqueue termination request */
-    struct meta_request termination_req;
-    termination_req.req.request_id = -1;
-    add_to_queue(termination_req, the_queue);
+    termination_flag = 1;
     printf("INFO: Waiting for worker thread to terminate...\n");
 
     /* Ask the worker thread to terminate */
@@ -366,11 +363,9 @@ void handle_connection(int conn_socket)
     }
 
     /* FREE UP DATA STRUCTURES AND SHUTDOWN CONNECTION WITH CLIENT */
-    sem_destroy(&the_queue->queue_mutex);
-    sem_destroy(&the_queue->queue_notify);
     free(the_queue);
-    free(req);
     close(conn_socket);
+    printf("INFO: Client disconnected.\n");
 }
 
 
