@@ -116,23 +116,23 @@ int add_to_queue(struct meta_request to_add, struct queue *the_queue)
 
 
 /* Add a new request <request> to the shared queue <the_queue> */
-struct meta_request get_from_queue(struct queue *the_queue) {
+struct meta_request get_from_queue(struct queue *the_queue)
+{
     struct meta_request retval;
+    /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
     sem_wait(queue_notify);
-    sem_wait(&the_queue->queue_mutex);
+    sem_wait(queue_mutex);
+    /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
 
-    if (the_queue->termination_flag && the_queue->count == 0) {
-        sem_post(&the_queue->queue_mutex);
-        // Return a special meta_request indicating termination
-        retval.req.request_id = -1; // Assuming -1 is an invalid ID
-        return retval;
-    }
-
+    /* WRITE YOUR CODE HERE! */
+    /* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
     retval = the_queue->meta_requests[the_queue->front];
     the_queue->front = (the_queue->front + 1) % QUEUE_SIZE;
     the_queue->count--;
 
-    sem_post(&the_queue->queue_mutex);
+    /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
+    sem_post(queue_mutex);
+    /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
     return retval;
 }
 
@@ -277,8 +277,7 @@ void handle_connection(int conn_socket)
     the_queue->front = 0;
     the_queue->rear = 0;
     the_queue->count = 0;
-    sem_init(&the_queue->queue_mutex, 0, 1);
-    sem_init(&the_queue->queue_notify, 0, 0);
+    the_queue->termination_flag = 0;
 
 
     /* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
