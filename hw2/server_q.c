@@ -73,8 +73,6 @@ struct queue {
     int count;      // Number of elements in the queue
     volatile int termination_flag; // Flag to signal termination
 
-    sem_t queue_mutex;   // Semaphore acting as a mutex
-    sem_t queue_notify;  // Semaphore to notify worker threads
 };
 
 
@@ -282,8 +280,7 @@ void handle_connection(int conn_socket)
     sem_init(&the_queue->queue_mutex, 0, 1);
     sem_init(&the_queue->queue_notify, 0, 0);
 
-    /* Queue ready to go here. Let's start the worker thread. */
-    params.socket = conn_socket;
+
     /* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
     params = (struct worker_params *)malloc(sizeof(struct worker_params));
     if (params == NULL) {
