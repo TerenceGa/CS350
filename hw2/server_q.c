@@ -118,25 +118,26 @@ int add_to_queue(struct meta_request to_add, struct queue *the_queue)
 
 
 /* Add a new request <request> to the shared queue <the_queue> */
-struct meta_request get_from_queue(struct queue *the_queue)
-{
+struct meta_request get_from_queue(struct queue *the_queue) {
     struct meta_request retval;
-    /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
     sem_wait(queue_notify);
-    sem_wait(queue_mutex);
-    /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
+    sem_wait(&the_queue->queue_mutex);
 
-    /* WRITE YOUR CODE HERE! */
-    /* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
+    if (the_queue->termination_flag && the_queue->count == 0) {
+        sem_post(&the_queue->queue_mutex);
+        // Return a special meta_request indicating termination
+        retval.req.request_id = -1; // Assuming -1 is an invalid ID
+        return retval;
+    }
+
     retval = the_queue->meta_requests[the_queue->front];
     the_queue->front = (the_queue->front + 1) % QUEUE_SIZE;
     the_queue->count--;
 
-    /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-    sem_post(queue_mutex);
-    /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
+    sem_post(&the_queue->queue_mutex);
     return retval;
 }
+
 
 /* Implement this method to correctly dump the status of the queue
  * following the format Q:[R<request ID>,R<request ID>,...] */
@@ -204,13 +205,17 @@ void *worker_main(void *arg) {
     struct response res;
     ssize_t out_bytes;
 
-
-    while (termination_flag != 1) {
+    while (1) {
         // Dequeue the next meta_request
         m_req = get_from_queue(the_queue);
 
         // Check for shutdown signal
-
+        if (the_queue->termination_flag) {
+            break;
+        }
+        if (m_req.req.request_id == -1) {
+        break;
+    }
         // Record start timestamp
         struct timespec start_time, completion_time;
         clock_gettime(CLOCK_MONOTONIC, &start_time);
@@ -218,8 +223,7 @@ void *worker_main(void *arg) {
         // Process the request by performing a busywait
         busywait(m_req.req.request_length);
 
-        // sending back to client
-        // Preparing the response
+        // Prepare the response
         res.request_id = m_req.req.request_id;
         res.reserved = 0;
         res.ack = 0;
@@ -230,11 +234,6 @@ void *worker_main(void *arg) {
         printf("INFO: Response sent on socket %d\n", conn_socket);
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
-
-        // Prepare the response
-
-        // Send the response back to the client
-
 
         // Print the report
         printf("R%d:%.6f,%.6f,%.6f,%.6f,%.6f\n",
@@ -254,6 +253,7 @@ void *worker_main(void *arg) {
     return NULL;
 }
 
+
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
  * with the client is interrupted. */
@@ -263,7 +263,7 @@ void handle_connection(int conn_socket)
     struct meta_request m_req;
     struct queue *the_queue;
     struct worker_params *params;
-    
+    struct worker_params full_params;
     ssize_t in_bytes;
 
     /* The connection with the client is alive here. Let's
@@ -344,16 +344,15 @@ void handle_connection(int conn_socket)
     } while (in_bytes != 0);
 
     /* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
-    free (req);
-    free (m_req);
+    /* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
+    free(req);
+    // free(m_req); // Removed this line
     /* Enqueue termination request */
     termination_flag = 1;
+    the_queue->termination_flag = 1; // Ensure the queue's termination_flag is also set
     printf("INFO: Waiting for worker thread to terminate...\n");
 
     /* Ask the worker thread to terminate */
-    /* ASSERT TERMINATION FLAG FOR THE WORKER THREAD */
-
-    /* Make sure to wake-up any thread left stuck waiting for items in the queue. DO NOT TOUCH */
     sem_post(queue_notify);
 
     /* Wait for orderly termination of the worker thread */
@@ -366,6 +365,7 @@ void handle_connection(int conn_socket)
     free(the_queue);
     close(conn_socket);
     printf("INFO: Client disconnected.\n");
+
 }
 
 
