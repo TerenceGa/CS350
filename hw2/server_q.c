@@ -261,13 +261,10 @@ void handle_connection(int conn_socket)
     struct meta_request m_req;
     struct queue *the_queue;
     struct worker_params *params;
-    struct worker_params full_params;
+    pthread_t worker_thread;
     ssize_t in_bytes;
 
-    /* The connection with the client is alive here. Let's
-     * initialize the shared queue. */
-
-    /* IMPLEMENT HERE ANY QUEUE INITIALIZATION LOGIC */
+    /* Initialize the shared queue */
     the_queue = (struct queue *)malloc(sizeof(struct queue));
     if (the_queue == NULL) {
         perror("Failed to allocate memory for the_queue");
@@ -279,8 +276,7 @@ void handle_connection(int conn_socket)
     the_queue->count = 0;
     the_queue->termination_flag = 0;
 
-
-    /* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
+    /* Allocate and set worker parameters */
     params = (struct worker_params *)malloc(sizeof(struct worker_params));
     if (params == NULL) {
         perror("Failed to allocate memory for worker_params");
@@ -289,9 +285,9 @@ void handle_connection(int conn_socket)
         return;
     }
     params->the_queue = the_queue;
-    params->socket = conn_socket;  // **Set the socket descriptor here**
-    pthread_t worker_thread;
+    params->socket = conn_socket;  // **Ensure this assignment is present**
 
+    /* Create the worker thread */
     int ret = pthread_create(&worker_thread, NULL, worker_main, (void *)params);
     if (ret != 0) {
         fprintf(stderr, "Error: pthread_create() failed with code %d\n", ret);
@@ -301,21 +297,27 @@ void handle_connection(int conn_socket)
         return;
     }
 
+    /* Allocate memory for the request structure */
+    req = (struct request *)malloc(sizeof(struct request));
+    if (req == NULL) {
+        perror("Failed to allocate memory for req");
+        // Clean up and exit
+        free(params);
+        free(the_queue);
+        close(conn_socket);
+        return;
+    }
 
+    /* Handle incoming requests */
     do {
         printf("INFO: Waiting for Receiving request...\n");
         // Receive the request from the client
         in_bytes = recv(conn_socket, req, sizeof(struct request), 0);
         printf("INFO: Received request, in_bytes=%ld\n", in_bytes);
 
-
         /* SAMPLE receipt_timestamp HERE */
         clock_gettime(CLOCK_MONOTONIC, &m_req.receipt_timestamp);
 
-        /* Don't just return if in_bytes is 0 or -1. Instead
-         * skip the response and break out of the loop in an
-         * orderly fashion so that we can de-allocate the req
-         * and resp variables, and shutdown the socket. */
         if (in_bytes == sizeof(struct request)) {
             m_req.req = *req;
             add_to_queue(m_req, the_queue);
@@ -329,16 +331,13 @@ void handle_connection(int conn_socket)
 
     } while (in_bytes != 0);
 
-    /* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
-    /* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
+    /* Clean up and terminate */
     free(req);
-    // free(m_req); // Removed this line
-    /* Enqueue termination request */
     termination_flag = 1;
     the_queue->termination_flag = 1; // Ensure the queue's termination_flag is also set
     printf("INFO: Waiting for worker thread to terminate...\n");
 
-    /* Ask the worker thread to terminate */
+    /* Signal the worker thread to terminate */
     sem_post(queue_notify);
 
     /* Wait for orderly termination of the worker thread */
@@ -347,12 +346,12 @@ void handle_connection(int conn_socket)
         return;
     }
 
-    /* FREE UP DATA STRUCTURES AND SHUTDOWN CONNECTION WITH CLIENT */
+    /* Free up data structures and shutdown connection with client */
     free(the_queue);
     close(conn_socket);
     printf("INFO: Client disconnected.\n");
-
 }
+
 
 
 /* Template implementation of the main function for the FIFO
