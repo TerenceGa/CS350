@@ -227,7 +227,7 @@ void *worker_main(void *arg) {
         // Sending the response back to the client
         send(conn_socket, &res, sizeof(res), 0);
         
-        printf("INFO: Response sent\n");
+        printf("INFO: Response sent\n", conn_socket);
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
@@ -319,7 +319,8 @@ void handle_connection(int conn_socket)
         printf("INFO: Waiting for Receiving request...\n");
         // Receive the request from the client
         in_bytes = recv(conn_socket, req, sizeof(struct request), 0);
-        printf("INFO: Received request\n"+in_bytes);
+        printf("INFO: Received request, in_bytes=%ld\n", in_bytes);
+
 
         /* SAMPLE receipt_timestamp HERE */
         clock_gettime(CLOCK_MONOTONIC, &m_req.receipt_timestamp);
