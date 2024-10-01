@@ -106,7 +106,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 		clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
 
 		struct response rej_res;
-		rej_res.req_id = to_add.req.req_id;
+		rej_res.request_id = to_add.req.request_id;
 		rej_res.reserved = 0;
 		rej_res.ack = 1;
 
@@ -115,7 +115,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 		}
 		/* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
 		printf("X%ld:%.6f,%.6f,%.6f\n",
-               to_add.req_id,
+               to_add.request_id,
                timespec_to_seconds(to_add.req.sent_timestamp),
                timespec_to_seconds(to_add.req.request_length),
                timespec_to_seconds(reject_timestamp));
@@ -323,11 +323,6 @@ void handle_connection(int conn_socket)
 		 * skip the response and break out of the loop in an
 		 * orderly fashion so that we can de-allocate the req
 		 * and resp varaibles, and shutdown the socket. */
-		if (in_bytes > 0) {
-			add_to_queue(*req, the_queue, conn_socket);
-			
-			/* HANDLE REJECTION IF NEEDED */
-		}
 	} while (in_bytes > 0);
 
 	/* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
