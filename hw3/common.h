@@ -39,9 +39,10 @@
 /* Request payload as sent by the client and received by the
  * server. */
 struct request {
-	uint64_t req_id;
-	struct timespec req_timestamp;
-	struct timespec req_length;
+	uint64_t request_id;
+    struct timespec sent_timestamp;
+    struct timespec request_length;
+
 };
 struct meta_request {
     struct request req;
@@ -51,8 +52,7 @@ struct meta_request {
 /* Response payload as sent by the server and received by the
  * client. */
 struct response {
-	uint64_t req_id;
+    uint64_t request_id;
     uint64_t reserved;
-	uint8_t  ack;
+    uint8_t ack;
 };
-

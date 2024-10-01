@@ -65,7 +65,7 @@ sem_t * queue_notify;
 
 struct queue {
     /* IMPLEMENT ME */
-	struct meta_request meta_requests[QUEUE_SIZE]; // Array of meta_requests
+	struct meta_request meta_requests[queue_size]; // Array of meta_requests
     int front;      // Points to the front of the queue
     int rear;       // Points to the next insertion point
     int count;      // Number of elements in the queue
@@ -82,11 +82,11 @@ struct worker_params {
 
 
 /* Add a new request <request> to the shared queue <the_queue> */
-int add_to_queue(struct meta_request to_add, struct queue * the_queue)
+int add_to_queue(struct meta_request to_add, struct queue * the_queue int conn_socket)
 {
 	int retval = 0;
 	struct timespec reject_timestamp;
-
+	
 	/* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
 	sem_wait(queue_mutex);
 	/* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
@@ -104,17 +104,16 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue)
 		clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
 
 		struct response rej_res;
-		rej_res.request_id = m_req.req.request_id;
+		rej_res.req_id = to_add.req.req_id;
 		rej_res.reserved = 0;
 		rej_res.ack = 1;
 
 		if (send(conn_socket, &rej_res, sizeof(rej_res), 0) != sizeof(rej_res)) {
         perror("Failed to send rejection response");
-        break;
 		}
 		/* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
 		printf("X%ld:%.6f,%.6f,%.6f\n",
-               to_add.req.request_id,
+               to_add.req_id,
                timespec_to_seconds(to_add.req.sent_timestamp),
                timespec_to_seconds(to_add.req.request_length),
                timespec_to_seconds(reject_timestamp));
@@ -131,7 +130,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue)
 /* Add a new request <request> to the shared queue <the_queue> */
 struct meta_request get_from_queue(struct queue * the_queue)
 {
-	struct request retval;
+	struct meta_request retval;
 	/* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
 	sem_wait(queue_notify);
 	sem_wait(queue_mutex);
@@ -310,7 +309,7 @@ void handle_connection(int conn_socket)
 		clock_gettime(CLOCK_MONOTONIC, &m_req.receipt_timestamp);
 		if (in_bytes == sizeof(struct request)) {
             m_req.req = *req;
-            add_to_queue(m_req, the_queue);
+            add_to_queue(m_req, the_queue, conn_socket);
         } else if (in_bytes == 0) {
             // Connection closed
             break;
@@ -323,7 +322,7 @@ void handle_connection(int conn_socket)
 		 * orderly fashion so that we can de-allocate the req
 		 * and resp varaibles, and shutdown the socket. */
 		if (in_bytes > 0) {
-			add_to_queue(*req, the_queue);
+			add_to_queue(*req, the_queue, conn_socket);
 			
 			/* HANDLE REJECTION IF NEEDED */
 		}
