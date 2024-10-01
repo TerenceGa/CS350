@@ -62,6 +62,10 @@
 sem_t * queue_mutex;
 sem_t * queue_notify;
 /* END - Variables needed to protect the shared queue. DO NOT TOUCH */
+
+double timespec_to_seconds(struct timespec ts) {
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
 // #queue_size globle init
 int queue_size = 0;
 
@@ -115,7 +119,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 		}
 		/* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
 		printf("X%ld:%.6f,%.6f,%.6f\n",
-               to_add.request_id,
+               to_add.req.request_id,
                timespec_to_seconds(to_add.req.sent_timestamp),
                timespec_to_seconds(to_add.req.request_length),
                timespec_to_seconds(reject_timestamp));
