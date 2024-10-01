@@ -68,7 +68,7 @@ double timespec_to_seconds(struct timespec ts) {
 }
 // #queue_size globle init
 int queue_size = 0;
-int termination_flag = 0;
+
 struct queue {
     /* IMPLEMENT ME */
 	struct meta_request *meta_requests;
@@ -124,10 +124,11 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
                timespec_to_seconds(to_add.req.request_length),
                timespec_to_seconds(reject_timestamp));
 		dump_queue_status(the_queue);
-		sem_post(queue_notify);
+		
 	}
 
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
+	sem_post(queue_notify);
 	sem_post(queue_mutex);
 	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
 	return retval;
