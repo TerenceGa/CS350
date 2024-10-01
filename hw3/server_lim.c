@@ -68,7 +68,7 @@ double timespec_to_seconds(struct timespec ts) {
 }
 // #queue_size globle init
 int queue_size = 0;
-
+int termination_flag = 0;
 struct queue {
     /* IMPLEMENT ME */
 	struct meta_request *meta_requests;
@@ -338,7 +338,7 @@ void handle_connection(int conn_socket)
     the_queue->termination_flag = 1;
 	/* Make sure to wake-up any thread left stuck waiting for items in the queue. DO NOT TOUCH */
 	sem_post(queue_notify);
-	pthread_join(worker_thread, NULL);
+
 	/* Wait for orderly termination of the worker thread */	
 	/* ADD HERE LOGIC TO WAIT FOR TERMINATION OF WORKER */
 	
