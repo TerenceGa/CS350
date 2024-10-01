@@ -84,7 +84,7 @@ struct worker_params {
 
 
 /* Add a new request <request> to the shared queue <the_queue> */
-int add_to_queue(struct meta_request to_add, struct queue * the_queue int conn_socket)
+int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_socket)
 {
 	int retval = 0;
 	struct timespec reject_timestamp;
