@@ -62,6 +62,8 @@
 sem_t * queue_mutex;
 sem_t * queue_notify;
 /* END - Variables needed to protect the shared queue. DO NOT TOUCH */
+// #queue_size globle init
+int queue_size = 0;
 
 struct queue {
     /* IMPLEMENT ME */
@@ -358,7 +360,7 @@ int main (int argc, char ** argv) {
 	struct in_addr any_address;
 	socklen_t client_len;
 	int opt;
-    int queue_size = 0;
+    
 
 	/* Parse all the command line arguments */
 	/* IMPLEMENT ME!! */
