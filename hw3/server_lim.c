@@ -65,7 +65,7 @@ sem_t * queue_notify;
 
 struct queue {
     /* IMPLEMENT ME */
-	struct meta_request meta_requests[queue_size]; // Array of meta_requests
+	struct meta_request *meta_requests;
     int front;      // Points to the front of the queue
     int rear;       // Points to the next insertion point
     int count;      // Number of elements in the queue
@@ -262,7 +262,7 @@ void handle_connection(int conn_socket)
 {
     struct request *req;
     struct meta_request m_req;
-    struct queue *the_queue;
+    struct queue *the_queue = malloc(sizeof(struct queue));
     struct worker_params *params;
     pthread_t worker_thread;
     ssize_t in_bytes;
