@@ -139,7 +139,7 @@ struct meta_request get_from_queue(struct queue * the_queue)
 	/* WRITE YOUR CODE HERE! */
 	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
 	retval = the_queue->meta_requests[the_queue->front];
-	the_queue->front = (the_queue->front + 1) % QUEUE_SIZE;
+	the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
 	the_queue->count--;
 
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
@@ -161,7 +161,7 @@ void dump_queue_status(struct queue * the_queue)
 	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
 	printf("Q:[");
 	for (i = 0; i < the_queue->count; i++) {
-		int index = (the_queue->front + i) % QUEUE_SIZE;
+		int index = (the_queue->front + i) % the_queue->queue_size;
 		printf("R%d", the_queue->meta_requests[index].req.request_id);
 		if (i != the_queue->count - 1) {
 			printf(",");
