@@ -221,9 +221,10 @@ void *worker_main(void *arg) {
     ssize_t out_bytes;
 
     while (1) {
+		printf("INFO: Worker thread waiting for requests...\n");
         // Dequeue the next meta_request
         m_req = get_from_queue(the_queue);
-
+		printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
         // Check for shutdown signal
         if (the_queue->termination_flag) {
             break;
