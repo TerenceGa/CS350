@@ -148,9 +148,14 @@ struct meta_request get_from_queue(struct queue * the_queue)
 
 	/* WRITE YOUR CODE HERE! */
 	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
-	retval = the_queue->meta_requests[the_queue->front];
-	the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
-	the_queue->count--;
+	 if (the_queue->count == 0) {
+		retval.req.request_id = -1;
+	}
+	else {
+		retval = the_queue->meta_requests[the_queue->front];
+		the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
+		the_queue->count--;
+	}
 
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
 	sem_post(queue_mutex);
@@ -229,8 +234,8 @@ void *worker_main(void *arg) {
             break;
         }
         if (m_req.req.request_id == -1) {
-        break;
-    }
+       	continue;
+    	}
         // Record start timestamp
         struct timespec start_time, completion_time;
         clock_gettime(CLOCK_MONOTONIC, &start_time);
