@@ -106,6 +106,8 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
         the_queue->rear = (the_queue->rear + 1) % the_queue->queue_size;
         the_queue->count++;
         retval = 1;
+		
+		sem_post(queue_notify);
 	} else {
 		clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
 
@@ -128,7 +130,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 	}
 
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-	sem_post(queue_notify);
+
 	sem_post(queue_mutex);
 	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
 	return retval;
