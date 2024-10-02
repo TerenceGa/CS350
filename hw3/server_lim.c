@@ -278,12 +278,13 @@ void handle_connection(int conn_socket)
     struct request *req;
     struct meta_request m_req;
     struct worker_params *params;
+	struct queue *the_queue;
     pthread_t worker_thread;
     ssize_t in_bytes;
 
 	/* The connection with the client is alive here. Let's
 	 * initialize the shared queue. */
-	the_queue = (struct queue *)malloc(sizeof(struct queue));
+
 	if (the_queue == NULL) {
 		perror("Failed to allocate memory for queue");
 		close(conn_socket);
