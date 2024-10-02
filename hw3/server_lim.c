@@ -272,7 +272,6 @@ void handle_connection(int conn_socket)
 {
     struct request *req;
     struct meta_request m_req;
-    struct queue *the_queue = malloc(sizeof(struct queue));
     struct worker_params *params;
     pthread_t worker_thread;
     ssize_t in_bytes;
@@ -345,7 +344,7 @@ void handle_connection(int conn_socket)
 
 	/* Wait for orderly termination of the worker thread */	
 	/* ADD HERE LOGIC TO WAIT FOR TERMINATION OF WORKER */
-	
+	pthread_join(worker_thread, NULL);
 	/* FREE UP DATA STRUCTURES AND SHUTDOWN CONNECTION WITH CLIENT */
 	free(the_queue);
     close(conn_socket);
