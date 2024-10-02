@@ -284,7 +284,7 @@ void handle_connection(int conn_socket)
 
 	/* The connection with the client is alive here. Let's
 	 * initialize the shared queue. */
-
+	the_queue = malloc(sizeof(struct queue));
 	if (the_queue == NULL) {
 		perror("Failed to allocate memory for queue");
 		close(conn_socket);
