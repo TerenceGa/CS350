@@ -109,6 +109,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 		
 		sem_post(queue_notify);
 	} else {
+		printf("INFO: Queue is full. Rejecting request %ld\n", to_add.req.request_id);
 		clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
 
 		struct response rej_res;
