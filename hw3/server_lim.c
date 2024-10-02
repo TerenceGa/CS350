@@ -85,7 +85,7 @@ struct worker_params {
 	struct queue *the_queue;
 };
 
-
+int worker_send_signal = 0;
 
 /* Add a new request <request> to the shared queue <the_queue> */
 int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_socket)
@@ -106,20 +106,19 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
         the_queue->rear = (the_queue->rear + 1) % the_queue->queue_size;
         the_queue->count++;
         retval = 1;
-		
+		worker_send_signal = 1;
 		sem_post(queue_notify);
 	} else {
 		printf("INFO: Queue is full. Rejecting request %ld\n", to_add.req.request_id);
 		clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
-
+		worker_send_signal = 0;
 		struct response rej_res;
 		rej_res.request_id = to_add.req.request_id;
 		rej_res.reserved = 0;
 		rej_res.ack = 1;
-
-		if (send(conn_socket, &rej_res, sizeof(rej_res), 0) != sizeof(rej_res)) {
-        perror("Failed to send rejection response");
-		}
+		printf("ready to send\n");
+		send(conn_socket, &rej_res, sizeof(rej_res), 0)
+		printf("conn_socket: %d\n", conn_socket);
 		/* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
 		printf("X%ld:%.6f,%.6f,%.6f\n",
                to_add.req.request_id,
@@ -239,13 +238,14 @@ void *worker_main(void *arg) {
         // Process the request by performing a busywait
         busywait(m_req.req.request_length);
 
-        // Prepare the response
+		if (worker_send_signal == 1) {
+		        // Prepare the response
         res.request_id = m_req.req.request_id;
         res.reserved = 0;
         res.ack = 0;
         // Sending the response back to the client
         send(conn_socket, &res, sizeof(res), 0);
-        
+		}
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
