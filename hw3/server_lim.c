@@ -142,36 +142,39 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 struct meta_request get_from_queue(struct queue * the_queue)
 {
     struct meta_request retval;
-    /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
-    sem_wait(queue_notify);
-    sem_wait(queue_mutex);
-    /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
 
-    if (the_queue->count == 0) {
-        if (the_queue->termination_flag) {
-            // Signal worker to terminate
-            retval.req.request_id = -1; // Sentinel value
+    while (1) {
+        /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
+        sem_wait(queue_notify);
+        sem_wait(queue_mutex);
+        /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
+
+        if (the_queue->count > 0) {
+            // Proceed to dequeue
+            retval = the_queue->meta_requests[the_queue->front];
+            the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
+            the_queue->count--;
+            printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", retval.req.request_id, the_queue->count);
+
+            /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
             sem_post(queue_mutex);
+            /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
+            return retval;
+        } else if (the_queue->termination_flag) {
+            // Signal worker to terminate
+            sem_post(queue_mutex);
+            retval.req.request_id = -1; // Sentinel value
             return retval;
         } else {
             // Queue is empty but termination flag not set
             // Release the mutex and wait again
             sem_post(queue_mutex);
-            continue; // This would require a loop, so we need to handle it differently
+            // Continue the loop to wait for the next semaphore signal
+			continue;
         }
     }
-
-    // Proceed to dequeue
-    retval = the_queue->meta_requests[the_queue->front];
-    the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
-    the_queue->count--;
-    printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", retval.req.request_id, the_queue->count);
-
-    /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-    sem_post(queue_mutex);
-    /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
-    return retval;
 }
+
 
 
 
