@@ -105,6 +105,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
         the_queue->meta_requests[the_queue->rear] = to_add;
         the_queue->rear = (the_queue->rear + 1) % the_queue->queue_size;
         the_queue->count++;
+		printf("INFO: Added REQ %ld to queue. Queue count: %d\n", to_add.req.request_id, the_queue->count);
         retval = 1;
 		
 		sem_post(queue_notify);
@@ -227,9 +228,11 @@ void *worker_main(void *arg) {
 		printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
         // Check for shutdown signal
         if (the_queue->termination_flag && the_queue->count == 0) {
+			printf("INFO: Termination flag set and queue empty. Exiting worker thread.\n");
             break;
         }
         if (m_req.req.request_id == -1) {
+			 printf("INFO: Received termination request. Exiting worker thread.\n");
         break;
     }
         // Record start timestamp
@@ -244,7 +247,9 @@ void *worker_main(void *arg) {
         res.reserved = 0;
         res.ack = 0;
         // Sending the response back to the client
+		printf("INFO: Sending response to client for request %ld\n", m_req.req.request_id);
         send(conn_socket, &res, sizeof(res), 0);
+		printf("INFO: Response sent for request %ld\n", m_req.req.request_id, conn_socket);
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
