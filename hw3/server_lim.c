@@ -120,13 +120,17 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 		if (send(conn_socket, &rej_res, sizeof(rej_res), 0) != sizeof(rej_res)) {
         perror("Failed to send rejection response");
 		}
+		else
+		{
+			retval = 0;
+		}
 		/* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
 		printf("X%ld:%.6f,%.6f,%.6f\n",
                to_add.req.request_id,
                timespec_to_seconds(to_add.req.sent_timestamp),
                timespec_to_seconds(to_add.req.request_length),
                timespec_to_seconds(reject_timestamp));
-		dump_queue_status(the_queue);
+
 		
 	}
 
@@ -221,6 +225,7 @@ void *worker_main(void *arg) {
     ssize_t out_bytes;
 
     while (1) {
+		printf("INFO: Worker thread waiting for requests...\n");
         // Dequeue the next meta_request
         m_req = get_from_queue(the_queue);
 
@@ -272,20 +277,20 @@ void handle_connection(int conn_socket)
 {
     struct request *req;
     struct meta_request m_req;
+    struct queue *the_queue = malloc(sizeof(struct queue));
     struct worker_params *params;
     pthread_t worker_thread;
     ssize_t in_bytes;
 
 	/* The connection with the client is alive here. Let's
 	 * initialize the shared queue. */
-	the_queue = (struct queue *)malloc(sizeof(struct queue));
+
 	if (the_queue == NULL) {
 		perror("Failed to allocate memory for queue");
 		close(conn_socket);
 		return;
 	}
 
-	the_queue->meta_requests = (struct meta_request *)malloc(sizeof(struct meta_request) * queue_size);
 	if (the_queue->meta_requests == NULL) {
 		perror("Failed to allocate memory for meta_requests");
 		free(the_queue);
@@ -319,6 +324,7 @@ void handle_connection(int conn_socket)
 		if (in_bytes == sizeof(struct request)) {
             m_req.req = *req;
             add_to_queue(m_req, the_queue, conn_socket);
+			dump_queue_status(the_queue);
         } else if (in_bytes == 0) {
             // Connection closed
             break;
@@ -341,10 +347,10 @@ void handle_connection(int conn_socket)
     the_queue->termination_flag = 1;
 	/* Make sure to wake-up any thread left stuck waiting for items in the queue. DO NOT TOUCH */
 	sem_post(queue_notify);
-
+	pthread_join(worker_thread, NULL);
 	/* Wait for orderly termination of the worker thread */	
 	/* ADD HERE LOGIC TO WAIT FOR TERMINATION OF WORKER */
-	pthread_join(worker_thread, NULL);
+	
 	/* FREE UP DATA STRUCTURES AND SHUTDOWN CONNECTION WITH CLIENT */
 	free(the_queue);
     close(conn_socket);
