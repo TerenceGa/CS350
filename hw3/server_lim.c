@@ -151,13 +151,14 @@ struct meta_request get_from_queue(struct queue * the_queue)
         if (the_queue->termination_flag) {
             // Signal worker to terminate
             retval.req.request_id = -1; // Sentinel value
+            sem_post(queue_mutex);
+            return retval;
         } else {
-            // This should not happen
-            printf("ERROR: Semaphore signaled but queue is empty.\n");
-            retval.req.request_id = -1;
+            // Queue is empty but termination flag not set
+            // Release the mutex and wait again
+            sem_post(queue_mutex);
+            continue; // This would require a loop, so we need to handle it differently
         }
-        sem_post(queue_mutex);
-        return retval;
     }
 
     // Proceed to dequeue
@@ -171,6 +172,7 @@ struct meta_request get_from_queue(struct queue * the_queue)
     /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
     return retval;
 }
+
 
 
 /* Implement this method to correctly dump the status of the queue
@@ -237,54 +239,75 @@ void *worker_main(void *arg) {
 
     while (1) {
         printf("INFO: Worker thread waiting for requests...\n");
-        // Dequeue the next meta_request
-        m_req = get_from_queue(the_queue);
 
-        // Check for shutdown signal
-        if (m_req.req.request_id == -1) {
-            printf("INFO: Received termination request. Exiting worker thread.\n");
+        // Wait for items to be added to the queue
+        sem_wait(queue_notify);
+
+        // Protect access to the queue
+        sem_wait(queue_mutex);
+
+        // Check if there are items in the queue
+        if (the_queue->count > 0) {
+            // Dequeue the request
+            m_req = the_queue->meta_requests[the_queue->front];
+            the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
+            the_queue->count--;
+            printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", m_req.req.request_id, the_queue->count);
+            sem_post(queue_mutex);
+
+            // Process the request
+            printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
+
+            // Record start timestamp
+            struct timespec start_time, completion_time;
+            clock_gettime(CLOCK_MONOTONIC, &start_time);
+
+            // Process the request by performing a busywait
+            busywait(m_req.req.request_length);
+
+            // Prepare the response
+            res.request_id = m_req.req.request_id;
+            res.reserved = 0;
+            res.ack = 0;
+
+            // Sending the response back to the client
+            printf("INFO: Sending response to client for request %ld\n", m_req.req.request_id);
+            send(conn_socket, &res, sizeof(res), 0);
+            printf("INFO: Response sent for request %ld on socket %d\n", m_req.req.request_id, conn_socket);
+
+            // Record completion timestamp
+            clock_gettime(CLOCK_MONOTONIC, &completion_time);
+
+            // Print the report
+            printf("R%ld:%.6f,%.6f,%.6f,%.6f,%.6f\n",
+                   m_req.req.request_id,
+                   timespec_to_seconds(m_req.req.sent_timestamp),
+                   timespec_to_seconds(m_req.req.request_length),
+                   timespec_to_seconds(m_req.receipt_timestamp),
+                   timespec_to_seconds(start_time),
+                   timespec_to_seconds(completion_time));
+
+            // Dump queue status
+            dump_queue_status(the_queue);
+
+        } else if (the_queue->termination_flag) {
+            // Queue is empty and termination flag is set
+            sem_post(queue_mutex);
+            printf("INFO: Termination flag set and queue empty. Exiting worker thread.\n");
             break;
+        } else {
+            // Queue is empty but termination flag not set
+            // Release the mutex and wait again
+            sem_post(queue_mutex);
+            continue;
         }
-
-        printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
-
-        // Record start timestamp
-        struct timespec start_time, completion_time;
-        clock_gettime(CLOCK_MONOTONIC, &start_time);
-
-        // Process the request by performing a busywait
-        busywait(m_req.req.request_length);
-
-        // Prepare the response
-        res.request_id = m_req.req.request_id;
-        res.reserved = 0;
-        res.ack = 0;
-
-        // Sending the response back to the client
-        printf("INFO: Sending response to client for request %ld\n", m_req.req.request_id);
-        send(conn_socket, &res, sizeof(res), 0);
-        printf("INFO: Response sent for request %ld on socket %d\n", m_req.req.request_id, conn_socket);
-
-        // Record completion timestamp
-        clock_gettime(CLOCK_MONOTONIC, &completion_time);
-
-        // Print the report
-        printf("R%ld:%.6f,%.6f,%.6f,%.6f,%.6f\n",
-               m_req.req.request_id,
-               timespec_to_seconds(m_req.req.sent_timestamp),
-               timespec_to_seconds(m_req.req.request_length),
-               timespec_to_seconds(m_req.receipt_timestamp),
-               timespec_to_seconds(start_time),
-               timespec_to_seconds(completion_time));
-
-        // Dump queue status
-        dump_queue_status(the_queue);
     }
 
     // Clean up and exit the thread
     free(params);
     return NULL;
 }
+
 
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
