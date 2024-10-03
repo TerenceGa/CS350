@@ -307,6 +307,7 @@ void handle_connection(int conn_socket)
     the_queue->count = 0;
 	the_queue->queue_size = queue_size;
     the_queue->termination_flag = 0;
+	the_queue->meta_requests = (struct meta_request *)malloc(sizeof(struct meta_request) * queue_size);
 	/* Queue ready to go here. Let's start the worker thread. */
 
 	/* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
