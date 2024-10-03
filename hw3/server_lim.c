@@ -33,6 +33,8 @@
 *     new request is received, the request is rejected with a negative ack.
 *
 *******************************************************************************/
+
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -103,32 +105,29 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
         the_queue->meta_requests[the_queue->rear] = to_add;
         the_queue->rear = (the_queue->rear + 1) % the_queue->queue_size;
         the_queue->count++;
+		printf("INFO: Added REQ %ld to queue. Queue count: %d\n", to_add.req.request_id, the_queue->count);
         retval = 1;
 		
 		sem_post(queue_notify);
 	} else {
 		printf("INFO: Queue is full. Rejecting request %ld\n", to_add.req.request_id);
 		clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
-
+		printf("preparing to send %d\n", conn_socket);
 		struct response rej_res;
 		rej_res.request_id = to_add.req.request_id;
 		rej_res.reserved = 0;
 		rej_res.ack = 1;
+		if (send(conn_socket, &rej_res, sizeof(rej_res), 0) < 0) {
+			perror("send failed");
+		}
 
-		if (send(conn_socket, &rej_res, sizeof(rej_res), 0) != sizeof(rej_res)) {
-        perror("Failed to send rejection response");
-		}
-		else
-		{
-			retval = 0;
-		}
 		/* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
 		printf("X%ld:%.6f,%.6f,%.6f\n",
                to_add.req.request_id,
                timespec_to_seconds(to_add.req.sent_timestamp),
                timespec_to_seconds(to_add.req.request_length),
                timespec_to_seconds(reject_timestamp));
-		//dump_queue_status(the_queue);
+		dump_queue_status(the_queue);
 		
 	}
 
@@ -153,7 +152,7 @@ struct meta_request get_from_queue(struct queue * the_queue)
 	retval = the_queue->meta_requests[the_queue->front];
 	the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
 	the_queue->count--;
-
+ 	printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", retval.req.request_id, the_queue->count);
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
 	sem_post(queue_mutex);
 	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
@@ -213,7 +212,7 @@ void busywait(struct timespec duration) {
 }
 /* Main logic of the worker thread */
 /* IMPLEMENT HERE THE MAIN FUNCTION OF THE WORKER */
-int termination_flag = 0;
+
 void *worker_main(void *arg) {
     struct worker_params *params = (struct worker_params *)arg;
     struct queue *the_queue = params->the_queue;
@@ -223,14 +222,17 @@ void *worker_main(void *arg) {
     ssize_t out_bytes;
 
     while (1) {
+		printf("INFO: Worker thread waiting for requests...\n");
         // Dequeue the next meta_request
         m_req = get_from_queue(the_queue);
-
+		printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
         // Check for shutdown signal
-        if (the_queue->termination_flag) {
+        if (the_queue->termination_flag && the_queue->count == 1) {
+			printf("INFO: Termination flag set and queue empty. Exiting worker thread.\n");
             break;
         }
         if (m_req.req.request_id == -1) {
+			 printf("INFO: Received termination request. Exiting worker thread.\n");
         break;
     }
         // Record start timestamp
@@ -245,8 +247,10 @@ void *worker_main(void *arg) {
         res.reserved = 0;
         res.ack = 0;
         // Sending the response back to the client
+		printf("INFO: Sending response to client for request %ld\n", m_req.req.request_id);
         send(conn_socket, &res, sizeof(res), 0);
-        
+		printf("INFO: Response sent for request %ld on socket %d\n", m_req.req.request_id, conn_socket);
+
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
@@ -288,6 +292,7 @@ void handle_connection(int conn_socket)
 		return;
 	}
 
+	the_queue->meta_requests = (struct meta_request *)malloc(sizeof(struct meta_request) * queue_size);
 	if (the_queue->meta_requests == NULL) {
 		perror("Failed to allocate memory for meta_requests");
 		free(the_queue);
@@ -339,7 +344,6 @@ void handle_connection(int conn_socket)
 	/* Ask the worker thead to terminate */
 	/* ASSERT TERMINATION FLAG FOR THE WORKER THREAD */
 	free(req);
-    termination_flag = 1;
     the_queue->termination_flag = 1;
 	/* Make sure to wake-up any thread left stuck waiting for items in the queue. DO NOT TOUCH */
 	sem_post(queue_notify);
@@ -348,6 +352,7 @@ void handle_connection(int conn_socket)
 	/* ADD HERE LOGIC TO WAIT FOR TERMINATION OF WORKER */
 	
 	/* FREE UP DATA STRUCTURES AND SHUTDOWN CONNECTION WITH CLIENT */
+	free(the_queue->meta_requests);
 	free(the_queue);
     close(conn_socket);
     printf("INFO: Client disconnected.\n");
@@ -472,4 +477,4 @@ int main (int argc, char ** argv) {
 	close(sockfd);
 	return EXIT_SUCCESS;
 
-}）
+}
