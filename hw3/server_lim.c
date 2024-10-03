@@ -120,14 +120,10 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 		if (send(conn_socket, &rej_res, sizeof(rej_res), 0) < 0) {
 			perror("send failed");
 		}
-<<<<<<< HEAD
 		else
 		{
 			retval = 0;
 		}
-=======
-
->>>>>>> 77c415ded6dc6bc96048af39e001baf58c39bb00
 		/* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
 		printf("X%ld:%.6f,%.6f,%.6f\n",
                to_add.req.request_id,
