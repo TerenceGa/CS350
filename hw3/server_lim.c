@@ -112,7 +112,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 	} else {
 		printf("INFO: Queue is full. Rejecting request %ld\n", to_add.req.request_id);
 		clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
-		printf("preparing to send %ld\n", conn_socket);
+		printf("preparing to send %d\n", conn_socket);
 		struct response rej_res;
 		rej_res.request_id = to_add.req.request_id;
 		rej_res.reserved = 0;
@@ -224,10 +224,16 @@ void *worker_main(void *arg) {
     while (1) {
 		printf("INFO: Worker thread waiting for requests...\n");
         // Dequeue the next meta_request
-        m_req = get_from_queue(the_queue);
+        if (the_queue->count == 0) {
+			printf("INFO: Queue empty. Waiting for requests...\n");
+			continue;
+		} else {
+			m_req = get_from_queue(the_queue);
+		}
+		
 		printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
         // Check for shutdown signal
-        if (the_queue->termination_flag && the_queue->count == 0) {
+        if (the_queue->termination_flag && the_queue->count == 1) {
 			printf("INFO: Termination flag set and queue empty. Exiting worker thread.\n");
             break;
         }
