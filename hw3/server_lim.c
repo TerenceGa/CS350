@@ -141,42 +141,23 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 /* Add a new request <request> to the shared queue <the_queue> */
 struct meta_request get_from_queue(struct queue * the_queue)
 {
-    struct meta_request retval;
+	struct meta_request retval;
+	/* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
+	sem_wait(queue_notify);
+	sem_wait(queue_mutex);
+	/* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
 
-    while (1) {
-        /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
-        sem_wait(queue_notify);
-        sem_wait(queue_mutex);
-        /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
-
-        if (the_queue->count > 0) {
-            // Proceed to dequeue
-            retval = the_queue->meta_requests[the_queue->front];
-            the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
-            the_queue->count--;
-            printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", retval.req.request_id, the_queue->count);
-
-            /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-            sem_post(queue_mutex);
-            /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
-            return retval;
-        } else if (the_queue->termination_flag) {
-            // Signal worker to terminate
-            sem_post(queue_mutex);
-            retval.req.request_id = -1; // Sentinel value
-            return retval;
-        } else {
-            // Queue is empty but termination flag not set
-            // Release the mutex and wait again
-            sem_post(queue_mutex);
-            // Continue the loop to wait for the next semaphore signal
-			continue;
-        }
-    }
+	/* WRITE YOUR CODE HERE! */
+	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
+	retval = the_queue->meta_requests[the_queue->front];
+	the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
+	the_queue->count--;
+ 	printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", retval.req.request_id, the_queue->count);
+	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
+	sem_post(queue_mutex);
+	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
+	return retval;
 }
-
-
-
 
 /* Implement this method to correctly dump the status of the queue
  * following the format Q:[R<request ID>,R<request ID>,...] */
@@ -241,77 +222,55 @@ void *worker_main(void *arg) {
     ssize_t out_bytes;
 
     while (1) {
-        printf("INFO: Worker thread waiting for requests...\n");
-
-        // Wait for items to be added to the queue
-        sem_wait(queue_notify);
-
-        // Protect access to the queue
-        sem_wait(queue_mutex);
-
-        // Check if there are items in the queue
-        if (the_queue->count > 0) {
-            // Dequeue the request
-            m_req = the_queue->meta_requests[the_queue->front];
-            the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
-            the_queue->count--;
-            printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", m_req.req.request_id, the_queue->count);
-            sem_post(queue_mutex);
-
-            // Process the request
-            printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
-
-            // Record start timestamp
-            struct timespec start_time, completion_time;
-            clock_gettime(CLOCK_MONOTONIC, &start_time);
-
-            // Process the request by performing a busywait
-            busywait(m_req.req.request_length);
-
-            // Prepare the response
-            res.request_id = m_req.req.request_id;
-            res.reserved = 0;
-            res.ack = 0;
-
-            // Sending the response back to the client
-            printf("INFO: Sending response to client for request %ld\n", m_req.req.request_id);
-            send(conn_socket, &res, sizeof(res), 0);
-            printf("INFO: Response sent for request %ld on socket %d\n", m_req.req.request_id, conn_socket);
-
-            // Record completion timestamp
-            clock_gettime(CLOCK_MONOTONIC, &completion_time);
-
-            // Print the report
-            printf("R%ld:%.6f,%.6f,%.6f,%.6f,%.6f\n",
-                   m_req.req.request_id,
-                   timespec_to_seconds(m_req.req.sent_timestamp),
-                   timespec_to_seconds(m_req.req.request_length),
-                   timespec_to_seconds(m_req.receipt_timestamp),
-                   timespec_to_seconds(start_time),
-                   timespec_to_seconds(completion_time));
-
-            // Dump queue status
-            dump_queue_status(the_queue);
-
-        } else if (the_queue->termination_flag) {
-            // Queue is empty and termination flag is set
-            sem_post(queue_mutex);
-            printf("INFO: Termination flag set and queue empty. Exiting worker thread.\n");
+		printf("INFO: Worker thread waiting for requests...\n");
+        // Dequeue the next meta_request
+        m_req = get_from_queue(the_queue);
+		printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
+        // Check for shutdown signal
+        if (the_queue->termination_flag && the_queue->count == 1) {
+			printf("INFO: Termination flag set and queue empty. Exiting worker thread.\n");
             break;
-        } else {
-            // Queue is empty but termination flag not set
-            // Release the mutex and wait again
-            sem_post(queue_mutex);
-            continue;
         }
+        if (m_req.req.request_id == -1) {
+			 printf("INFO: Received termination request. Exiting worker thread.\n");
+        break;
+    }
+        // Record start timestamp
+        struct timespec start_time, completion_time;
+        clock_gettime(CLOCK_MONOTONIC, &start_time);
+
+        // Process the request by performing a busywait
+        busywait(m_req.req.request_length);
+
+        // Prepare the response
+        res.request_id = m_req.req.request_id;
+        res.reserved = 0;
+        res.ack = 0;
+        // Sending the response back to the client
+		printf("INFO: Sending response to client for request %ld\n", m_req.req.request_id);
+        send(conn_socket, &res, sizeof(res), 0);
+		printf("INFO: Response sent for request %ld on socket %d\n", m_req.req.request_id, conn_socket);
+
+        // Record completion timestamp
+        clock_gettime(CLOCK_MONOTONIC, &completion_time);
+
+        // Print the report
+        printf("R%d:%.6f,%.6f,%.6f,%.6f,%.6f\n",
+               m_req.req.request_id,
+               timespec_to_seconds(m_req.req.sent_timestamp),
+               timespec_to_seconds(m_req.req.request_length),
+               timespec_to_seconds(m_req.receipt_timestamp),
+               timespec_to_seconds(start_time),
+               timespec_to_seconds(completion_time));
+
+        // Dump queue status
+        dump_queue_status(the_queue);
     }
 
     // Clean up and exit the thread
     free(params);
     return NULL;
 }
-
-
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
  * with the client is interrupted. */
@@ -323,8 +282,6 @@ void handle_connection(int conn_socket)
     struct worker_params *params;
     pthread_t worker_thread;
     ssize_t in_bytes;
-    size_t total_bytes_read;
-    char *buffer;
 
 	/* The connection with the client is alive here. Let's
 	 * initialize the shared queue. */
@@ -359,32 +316,28 @@ void handle_connection(int conn_socket)
 	int ret = pthread_create(&worker_thread, NULL, worker_main, (void *)params);
 	/* REUSE LOGIC FROM HW1 TO HANDLE THE PACKETS */
 
-	 req = (struct request *)malloc(sizeof(struct request));
-    buffer = (char *)req;
-    do {
-        total_bytes_read = 0;
-        while (total_bytes_read < sizeof(struct request)) {
-            in_bytes = recv(conn_socket, buffer + total_bytes_read, sizeof(struct request) - total_bytes_read, 0);
-            if (in_bytes == 0) {
-                // Connection closed
-                break;
-            } else if (in_bytes < 0) {
-                perror("recv failed");
-                break;
-            } else {
-                total_bytes_read += in_bytes;
-            }
-        }
-        if (in_bytes <= 0) {
-            // Error or connection closed
-            break;
-        }
-        if (total_bytes_read == sizeof(struct request)) {
-            clock_gettime(CLOCK_MONOTONIC, &m_req.receipt_timestamp);
+	req = (struct request *)malloc(sizeof(struct request));
+
+	do {
+		//in_bytes = recv(conn_socket, ... /* IMPLEMENT ME */);
+		/* SAMPLE receipt_timestamp HERE */
+		in_bytes = recv(conn_socket, req, sizeof(struct request), 0);
+		clock_gettime(CLOCK_MONOTONIC, &m_req.receipt_timestamp);
+		if (in_bytes == sizeof(struct request)) {
             m_req.req = *req;
             add_to_queue(m_req, the_queue, conn_socket);
+        } else if (in_bytes == 0) {
+            // Connection closed
+            break;
+        } else if (in_bytes < 0) {
+            perror("recv failed");
+            break;
         }
-    } while (1);
+		/* Don't just return if in_bytes is 0 or -1. Instead
+		 * skip the response and break out of the loop in an
+		 * orderly fashion so that we can de-allocate the req
+		 * and resp varaibles, and shutdown the socket. */
+	} while (in_bytes > 0);
 
 	/* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
 	
