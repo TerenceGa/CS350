@@ -141,23 +141,37 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 /* Add a new request <request> to the shared queue <the_queue> */
 struct meta_request get_from_queue(struct queue * the_queue)
 {
-	struct meta_request retval;
-	/* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
-	sem_wait(queue_notify);
-	sem_wait(queue_mutex);
-	/* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
+    struct meta_request retval;
+    /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
+    sem_wait(queue_notify);
+    sem_wait(queue_mutex);
+    /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
 
-	/* WRITE YOUR CODE HERE! */
-	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
-	retval = the_queue->meta_requests[the_queue->front];
-	the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
-	the_queue->count--;
- 	printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", retval.req.request_id, the_queue->count);
-	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-	sem_post(queue_mutex);
-	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
-	return retval;
+    if (the_queue->count == 0) {
+        if (the_queue->termination_flag) {
+            // Signal worker to terminate
+            retval.req.request_id = -1; // Sentinel value
+        } else {
+            // This should not happen
+            printf("ERROR: Semaphore signaled but queue is empty.\n");
+            retval.req.request_id = -1;
+        }
+        sem_post(queue_mutex);
+        return retval;
+    }
+
+    // Proceed to dequeue
+    retval = the_queue->meta_requests[the_queue->front];
+    the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
+    the_queue->count--;
+    printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", retval.req.request_id, the_queue->count);
+
+    /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
+    sem_post(queue_mutex);
+    /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
+    return retval;
 }
+
 
 /* Implement this method to correctly dump the status of the queue
  * following the format Q:[R<request ID>,R<request ID>,...] */
@@ -222,25 +236,18 @@ void *worker_main(void *arg) {
     ssize_t out_bytes;
 
     while (1) {
-		printf("INFO: Worker thread waiting for requests...\n");
+        printf("INFO: Worker thread waiting for requests...\n");
         // Dequeue the next meta_request
-        if (the_queue->count == 0) {
-			printf("INFO: Queue empty. Waiting for requests...\n");
-			continue;
-		} else {
-			m_req = get_from_queue(the_queue);
-		}
-		
-		printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
+        m_req = get_from_queue(the_queue);
+
         // Check for shutdown signal
-        if (the_queue->termination_flag && the_queue->count == 1) {
-			printf("INFO: Termination flag set and queue empty. Exiting worker thread.\n");
+        if (m_req.req.request_id == -1) {
+            printf("INFO: Received termination request. Exiting worker thread.\n");
             break;
         }
-        if (m_req.req.request_id == -1) {
-			 printf("INFO: Received termination request. Exiting worker thread.\n");
-        break;
-    }
+
+        printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
+
         // Record start timestamp
         struct timespec start_time, completion_time;
         clock_gettime(CLOCK_MONOTONIC, &start_time);
@@ -252,16 +259,17 @@ void *worker_main(void *arg) {
         res.request_id = m_req.req.request_id;
         res.reserved = 0;
         res.ack = 0;
+
         // Sending the response back to the client
-		printf("INFO: Sending response to client for request %ld\n", m_req.req.request_id);
+        printf("INFO: Sending response to client for request %ld\n", m_req.req.request_id);
         send(conn_socket, &res, sizeof(res), 0);
-		printf("INFO: Response sent for request %ld on socket %d\n", m_req.req.request_id, conn_socket);
+        printf("INFO: Response sent for request %ld on socket %d\n", m_req.req.request_id, conn_socket);
 
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
         // Print the report
-        printf("R%d:%.6f,%.6f,%.6f,%.6f,%.6f\n",
+        printf("R%ld:%.6f,%.6f,%.6f,%.6f,%.6f\n",
                m_req.req.request_id,
                timespec_to_seconds(m_req.req.sent_timestamp),
                timespec_to_seconds(m_req.req.request_length),
@@ -277,6 +285,7 @@ void *worker_main(void *arg) {
     free(params);
     return NULL;
 }
+
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
  * with the client is interrupted. */
