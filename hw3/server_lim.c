@@ -111,12 +111,14 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 	} else {
 		printf("INFO: Queue is full. Rejecting request %ld\n", to_add.req.request_id);
 		clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
-
+		printf("preparing to send\n");
 		struct response rej_res;
 		rej_res.request_id = to_add.req.request_id;
 		rej_res.reserved = 0;
 		rej_res.ack = 1;
-		send(conn_socket, &rej_res, sizeof(rej_res), 0)
+		if (send(conn_socket, &rej_res, sizeof(rej_res), 0) < 0) {
+			perror("send failed");
+		}
 
 		/* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
 		printf("X%ld:%.6f,%.6f,%.6f\n",
