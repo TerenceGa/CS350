@@ -62,7 +62,7 @@
 sem_t * queue_mutex;
 sem_t * queue_notify;
 /* END - Variables needed to protect the shared queue. DO NOT TOUCH */
-
+int termination_flag = 0;
 double timespec_to_seconds(struct timespec ts) {
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
@@ -127,7 +127,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
                timespec_to_seconds(to_add.req.sent_timestamp),
                timespec_to_seconds(to_add.req.request_length),
                timespec_to_seconds(reject_timestamp));
-		dump_queue_status(the_queue);
+		
 		
 	}
 
@@ -227,7 +227,7 @@ void *worker_main(void *arg) {
         m_req = get_from_queue(the_queue);
 		printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
         // Check for shutdown signal
-        if (the_queue->termination_flag && the_queue->count == 1) {
+        if (termination_flag == 1) {
 			printf("INFO: Termination flag set and queue empty. Exiting worker thread.\n");
             break;
         }
@@ -325,7 +325,12 @@ void handle_connection(int conn_socket)
 		clock_gettime(CLOCK_MONOTONIC, &m_req.receipt_timestamp);
 		if (in_bytes == sizeof(struct request)) {
             m_req.req = *req;
-            add_to_queue(m_req, the_queue, conn_socket);
+            int dump_signal = add_to_queue(m_req, the_queue, conn_socket);
+			if (dump_signal == 1)
+			{
+				dump_queue_status(the_queue);
+			}
+			
         } else if (in_bytes == 0) {
             // Connection closed
             break;
@@ -343,6 +348,7 @@ void handle_connection(int conn_socket)
 	
 	/* Ask the worker thead to terminate */
 	/* ASSERT TERMINATION FLAG FOR THE WORKER THREAD */
+	termination_flag = 1;
 	free(req);
     the_queue->termination_flag = 1;
 	/* Make sure to wake-up any thread left stuck waiting for items in the queue. DO NOT TOUCH */
