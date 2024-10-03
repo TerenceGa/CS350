@@ -111,7 +111,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 	} else {
 		printf("INFO: Queue is full. Rejecting request %ld\n", to_add.req.request_id);
 		clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
-		printf("preparing to send %ld\n" conn_socket);
+		printf("preparing to send %ld\n", conn_socket);
 		struct response rej_res;
 		rej_res.request_id = to_add.req.request_id;
 		rej_res.reserved = 0;
@@ -211,7 +211,7 @@ void busywait(struct timespec duration) {
 }
 /* Main logic of the worker thread */
 /* IMPLEMENT HERE THE MAIN FUNCTION OF THE WORKER */
-int termination_flag = 0;
+
 void *worker_main(void *arg) {
     struct worker_params *params = (struct worker_params *)arg;
     struct queue *the_queue = params->the_queue;
@@ -226,7 +226,7 @@ void *worker_main(void *arg) {
         m_req = get_from_queue(the_queue);
 		printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
         // Check for shutdown signal
-        if (the_queue->termination_flag) {
+        if (the_queue->termination_flag && the_queue->count == 0) {
             break;
         }
         if (m_req.req.request_id == -1) {
@@ -245,7 +245,6 @@ void *worker_main(void *arg) {
         res.ack = 0;
         // Sending the response back to the client
         send(conn_socket, &res, sizeof(res), 0);
-        printf("snedingout\n", conn_socket);
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
@@ -339,7 +338,6 @@ void handle_connection(int conn_socket)
 	/* Ask the worker thead to terminate */
 	/* ASSERT TERMINATION FLAG FOR THE WORKER THREAD */
 	free(req);
-    termination_flag = 1;
     the_queue->termination_flag = 1;
 	/* Make sure to wake-up any thread left stuck waiting for items in the queue. DO NOT TOUCH */
 	sem_post(queue_notify);
@@ -348,6 +346,7 @@ void handle_connection(int conn_socket)
 	/* ADD HERE LOGIC TO WAIT FOR TERMINATION OF WORKER */
 	
 	/* FREE UP DATA STRUCTURES AND SHUTDOWN CONNECTION WITH CLIENT */
+	free(the_queue->meta_requests);
 	free(the_queue);
     close(conn_socket);
     printf("INFO: Client disconnected.\n");
