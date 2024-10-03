@@ -152,7 +152,7 @@ struct meta_request get_from_queue(struct queue * the_queue)
 	retval = the_queue->meta_requests[the_queue->front];
 	the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
 	the_queue->count--;
-
+ 	printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", retval.req.request_id, the_queue->count);
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
 	sem_post(queue_mutex);
 	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
@@ -249,7 +249,8 @@ void *worker_main(void *arg) {
         // Sending the response back to the client
 		printf("INFO: Sending response to client for request %ld\n", m_req.req.request_id);
         send(conn_socket, &res, sizeof(res), 0);
-		printf("INFO: Response sent for request %ld\n", m_req.req.request_id, conn_socket);
+		printf("INFO: Response sent for request %ld on socket %d\n", m_req.req.request_id, conn_socket);
+
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
 
