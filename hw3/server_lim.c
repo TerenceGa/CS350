@@ -297,6 +297,8 @@ void handle_connection(int conn_socket)
     struct worker_params *params;
     pthread_t worker_thread;
     ssize_t in_bytes;
+    size_t total_bytes_read;
+    char *buffer;
 
 	/* The connection with the client is alive here. Let's
 	 * initialize the shared queue. */
@@ -331,28 +333,32 @@ void handle_connection(int conn_socket)
 	int ret = pthread_create(&worker_thread, NULL, worker_main, (void *)params);
 	/* REUSE LOGIC FROM HW1 TO HANDLE THE PACKETS */
 
-	req = (struct request *)malloc(sizeof(struct request));
-
-	do {
-		//in_bytes = recv(conn_socket, ... /* IMPLEMENT ME */);
-		/* SAMPLE receipt_timestamp HERE */
-		in_bytes = recv(conn_socket, req, sizeof(struct request), 0);
-		clock_gettime(CLOCK_MONOTONIC, &m_req.receipt_timestamp);
-		if (in_bytes == sizeof(struct request)) {
-            m_req.req = *req;
-            add_to_queue(m_req, the_queue, conn_socket);
-        } else if (in_bytes == 0) {
-            // Connection closed
-            break;
-        } else if (in_bytes < 0) {
-            perror("recv failed");
+	 req = (struct request *)malloc(sizeof(struct request));
+    buffer = (char *)req;
+    do {
+        total_bytes_read = 0;
+        while (total_bytes_read < sizeof(struct request)) {
+            in_bytes = recv(conn_socket, buffer + total_bytes_read, sizeof(struct request) - total_bytes_read, 0);
+            if (in_bytes == 0) {
+                // Connection closed
+                break;
+            } else if (in_bytes < 0) {
+                perror("recv failed");
+                break;
+            } else {
+                total_bytes_read += in_bytes;
+            }
+        }
+        if (in_bytes <= 0) {
+            // Error or connection closed
             break;
         }
-		/* Don't just return if in_bytes is 0 or -1. Instead
-		 * skip the response and break out of the loop in an
-		 * orderly fashion so that we can de-allocate the req
-		 * and resp varaibles, and shutdown the socket. */
-	} while (in_bytes > 0);
+        if (total_bytes_read == sizeof(struct request)) {
+            clock_gettime(CLOCK_MONOTONIC, &m_req.receipt_timestamp);
+            m_req.req = *req;
+            add_to_queue(m_req, the_queue, conn_socket);
+        }
+    } while (1);
 
 	/* PERFORM ORDERLY DEALLOCATION AND OUTRO HERE */
 	
