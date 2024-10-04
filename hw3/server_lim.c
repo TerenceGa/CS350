@@ -106,7 +106,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
         the_queue->rear = (the_queue->rear + 1) % the_queue->queue_size;
         the_queue->count++;
 		printf("INFO: Added REQ %ld to queue. Queue count: %d\n", to_add.req.request_id, the_queue->count);
-        retval = 1;
+        retval = 0;
 		
 		sem_post(queue_notify);
 	} else {
@@ -117,6 +117,7 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
 		rej_res.request_id = to_add.req.request_id;
 		rej_res.reserved = 0;
 		rej_res.ack = 1;
+		retval = 1;
 		if (send(conn_socket, &rej_res, sizeof(rej_res), 0) < 0) {
 			perror("send failed");
 		}
