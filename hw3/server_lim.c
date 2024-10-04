@@ -105,14 +105,11 @@ int add_to_queue(struct meta_request to_add, struct queue * the_queue, int conn_
         the_queue->meta_requests[the_queue->rear] = to_add;
         the_queue->rear = (the_queue->rear + 1) % the_queue->queue_size;
         the_queue->count++;
-		printf("INFO: Added REQ %ld to queue. Queue count: %d\n", to_add.req.request_id, the_queue->count);
         retval = 0;
 		
 		sem_post(queue_notify);
 	} else {
-		printf("INFO: Queue is full. Rejecting request %ld\n", to_add.req.request_id);
 		clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
-		printf("preparing to send %d\n", conn_socket);
 		struct response rej_res;
 		rej_res.request_id = to_add.req.request_id;
 		rej_res.reserved = 0;
@@ -153,7 +150,6 @@ struct meta_request get_from_queue(struct queue * the_queue)
 	retval = the_queue->meta_requests[the_queue->front];
 	the_queue->front = (the_queue->front + 1) % the_queue->queue_size;
 	the_queue->count--;
- 	printf("INFO: Dequeued REQ %ld from queue. Queue count: %d\n", retval.req.request_id, the_queue->count);
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
 	sem_post(queue_mutex);
 	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
@@ -223,17 +219,13 @@ void *worker_main(void *arg) {
     ssize_t out_bytes;
 
     while (1) {
-		printf("INFO: Worker thread waiting for requests...\n");
         // Dequeue the next meta_request
         m_req = get_from_queue(the_queue);
-		printf("INFO: Worker thread processing request %ld\n", m_req.req.request_id);
         // Check for shutdown signal
         if (termination_flag == 1) {
-			printf("INFO: Termination flag set and queue empty. Exiting worker thread.\n");
             break;
         }
         if (m_req.req.request_id == -1) {
-			 printf("INFO: Received termination request. Exiting worker thread.\n");
         break;
     }
         // Record start timestamp
@@ -248,9 +240,7 @@ void *worker_main(void *arg) {
         res.reserved = 0;
         res.ack = 0;
         // Sending the response back to the client
-		printf("INFO: Sending response to client for request %ld\n", m_req.req.request_id);
         send(conn_socket, &res, sizeof(res), 0);
-		printf("INFO: Response sent for request %ld on socket %d\n", m_req.req.request_id, conn_socket);
 
         // Record completion timestamp
         clock_gettime(CLOCK_MONOTONIC, &completion_time);
@@ -362,7 +352,6 @@ void handle_connection(int conn_socket)
 	free(the_queue->meta_requests);
 	free(the_queue);
     close(conn_socket);
-    printf("INFO: Client disconnected.\n");
 }
 
 
@@ -448,7 +437,6 @@ int main (int argc, char ** argv) {
 	}
 
 	/* Ready to accept connections! */
-	printf("INFO: Waiting for incoming connection...\n");
 	client_len = sizeof(struct sockaddr_in);
 	accepted = accept(sockfd, (struct sockaddr *)&client, &client_len);
 
