@@ -360,15 +360,15 @@ int main (int argc, char ** argv) {
 	queue_size = 0;
 
 	/* Parse all the command line arguments */
-	while((opt = getopt(argc, argv, "q:")) != -1) {
-		switch (opt) {
-		case 'q':
-			queue_size = strtol(optarg, NULL, 10);
-			printf("INFO: setting queue size as %ld\n", queue_size);
-			break;
-		default: /* '?' */
-			fprintf(stderr, USAGE_STRING, argv[0]);
-		}
+    while((opt = getopt(argc, argv, "q:w:")) != -1) {
+        switch (opt) {
+        case 'q':
+            queue_size = strtol(optarg, NULL, 10);
+            printf("INFO: setting queue size as %ld\n", queue_size);
+            break;
+        case 'w':
+            worker_count = atoi(optarg);
+            printf("INFO: setting worker count as %d\n", worker_count);
 	}
 
 	if (!queue_size) {
