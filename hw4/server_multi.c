@@ -176,6 +176,31 @@ void dump_queue_status(struct queue * the_queue)
 	sem_post(queue_mutex);
 	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
 }
+void busywait_timespec(struct timespec duration) {
+    struct timespec start, current, end;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    // Calculate the end time
+    end.tv_sec = start.tv_sec + duration.tv_sec;
+    end.tv_nsec = start.tv_nsec + duration.tv_nsec;
+
+    // Normalize the end time
+    if (end.tv_nsec >= 1e9) {
+        end.tv_sec += end.tv_nsec / (long)1e9;
+        end.tv_nsec = end.tv_nsec % (long)1e9;
+    }
+
+
+    do {
+        clock_gettime(CLOCK_MONOTONIC, &current);
+        
+        if ((current.tv_sec > end.tv_sec) ||
+            (current.tv_sec == end.tv_sec && current.tv_nsec >= end.tv_nsec)) {
+            break;
+        }
+    } while (1);
+}
 
 /* Main logic of the worker thread */
 void *worker_main (void * arg)
