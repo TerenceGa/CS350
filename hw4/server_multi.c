@@ -62,9 +62,6 @@ sem_t * print_mutex;
 /* END - Variables needed to protect the shared queue. DO NOT TOUCH */
 int worker_count = 1;
 
-double TSPEC_TO_DOUBLE(struct timespec ts) {
-    return ts.tv_sec + ts.tv_nsec / 1e9;
-}
 /* Synchronized printf for multi-threaded operation */
 #define printf_m(...)				\
 	do {					\
@@ -237,13 +234,13 @@ void *worker_main (void * arg)
 		resp.ack = RESP_COMPLETED;
 		send(params->conn_socket, &resp, sizeof(struct response), 0);
 
-		printf_m("R%ld:%lf,%lf,%lf,%lf,%lf\n", req.request.req_id,
-		       TSPEC_TO_DOUBLE(req.request.req_timestamp),
-		       TSPEC_TO_DOUBLE(req.request.req_length),
-		       TSPEC_TO_DOUBLE(req.receipt_timestamp),
-		       TSPEC_TO_DOUBLE(req.start_timestamp),
-		       TSPEC_TO_DOUBLE(req.completion_timestamp)
-			);
+        printf_m("T%d R%ld:%lf,%lf,%lf,%lf,%lf\n", thread_id, req.request.req_id,
+                TSPEC_TO_DOUBLE(req.request.req_timestamp),
+                TSPEC_TO_DOUBLE(req.request.req_length),
+                TSPEC_TO_DOUBLE(req.receipt_timestamp),
+                TSPEC_TO_DOUBLE(req.start_timestamp),
+                TSPEC_TO_DOUBLE(req.completion_timestamp)
+            );
 
 		dump_queue_status(params->the_queue);
 	}
@@ -361,7 +358,7 @@ void handle_connection(int conn_socket, size_t queue_size)
     }
 	
 	printf("INFO: Worker threads exited.\n");
-	
+
     free(threads);
     free(params);
     free(the_queue);
