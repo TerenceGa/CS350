@@ -38,7 +38,6 @@
 #include <sched.h>
 #include <signal.h>
 #include <pthread.h>
-#include <timelib.h>
 /* Needed for wait(...) */
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -61,7 +60,11 @@ sem_t * queue_mutex;
 sem_t * queue_notify;
 sem_t * print_mutex;
 /* END - Variables needed to protect the shared queue. DO NOT TOUCH */
+int worker_count = 1;
 
+double TSPEC_TO_DOUBLE(struct timespec ts) {
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
 /* Synchronized printf for multi-threaded operation */
 #define printf_m(...)				\
 	do {					\
@@ -86,9 +89,10 @@ struct queue {
 };
 
 struct worker_params {
-	int conn_socket;
-	int worker_done;
-	struct queue * the_queue;
+    int thread_id;          
+    int conn_socket;
+    int worker_done;
+    struct queue *the_queue;
 };
 
 void queue_init(struct queue * the_queue, size_t queue_size)
@@ -206,8 +210,9 @@ void busywait(struct timespec duration) {
 /* Main logic of the worker thread */
 void *worker_main (void * arg)
 {
-	struct timespec now;
-	struct worker_params * params = (struct worker_params *)arg;
+    struct timespec now;
+    struct worker_params *params = (struct worker_params *)arg;
+    int thread_id = params->thread_id;
 
 	/* Print the first alive message. */
 	clock_gettime(CLOCK_MONOTONIC, &now);
@@ -275,24 +280,36 @@ void handle_connection(int conn_socket, size_t queue_size)
 	the_queue = (struct queue *)malloc(sizeof(struct queue));
 	queue_init(the_queue, queue_size);
 
-	/* Prepare worker_parameters */
-	worker_params.conn_socket = conn_socket;
-	worker_params.worker_done = 0;
-	worker_params.the_queue = the_queue;
+	pthread_t *threads = malloc(worker_count * sizeof(pthread_t));
+    struct worker_params *params = malloc(worker_count * sizeof(struct worker_params));
 
-	pthread_t p;
-	worker_id = start_worker(&p, &worker_params);
 
-	if (worker_id < 0) {
-		free(the_queue);
-		ERROR_INFO();
-		perror("Unable to create worker thread");
-		/* TODO fix premature return without socket shutdown */
-		return;
-	}
+    for (int i = 0; i < worker_count; i++) {
+        params[i].thread_id = i;
+        params[i].conn_socket = conn_socket;
+        params[i].worker_done = 0;
+        params[i].the_queue = the_queue;
 
-	printf("INFO: Worker thread started. Thread ID = %d\n", worker_id);
+        if (pthread_create(&threads[i], NULL, worker_main, (void *)&params[i]) != 0) {
+            perror("Failed to create worker thread");
+            /* Handle partial thread creation */
+            for (int j = 0; j < i; j++) {
+                params[j].worker_done = 1;
+                sem_post(queue_notify);  // Wake up any waiting threads
+            }
+            /* Join already created threads */
+            for (int j = 0; j < i; j++) {
+                pthread_join(threads[j], NULL);
+            }
+            free(threads);
+            free(params);
+            free(the_queue);
+            ERROR_INFO();
+            return;
+        }
 
+        printf("INFO: Worker thread %d started.\n", i);
+    }
 	/* We are ready to proceed with the rest of the request
 	 * handling logic. */
 
@@ -330,20 +347,28 @@ void handle_connection(int conn_socket, size_t queue_size)
 
 	/* Ask the worker thead to terminate */
 	printf("INFO: Asserting termination flag for worker thread...\n");
-	worker_params.worker_done = 1;
+	for (int i = 0; i < worker_count; i++) {
+        params[i].worker_done = 1;
+    }
 
 	/* Make sure to wake-up any thread left stuck waiting for items in the queue. */
 	sem_post(queue_notify);
 
 	/* Wait for orderly termination of the worker thread */
-	pthread_join(p,NULL);
-	printf("INFO: Worker thread exited.\n");
-	free(the_queue);
-
-	free(req);
-	shutdown(conn_socket, SHUT_RDWR);
-	close(conn_socket);
-	printf("INFO: Client disconnected.\n");
+    for (int i = 0; i < worker_count; i++) {
+        pthread_join(threads[i], NULL);
+        printf("INFO: Worker thread %d has exited.\n", i);
+    }
+	
+	printf("INFO: Worker threads exited.\n");
+	
+    free(threads);
+    free(params);
+    free(the_queue);
+    free(req);
+    shutdown(conn_socket, SHUT_RDWR);
+    close(conn_socket);
+    printf("INFO: Client disconnected.\n");
 }
 
 
@@ -362,13 +387,18 @@ int main (int argc, char ** argv) {
 	/* Parse all the command line arguments */
     while((opt = getopt(argc, argv, "q:w:")) != -1) {
         switch (opt) {
-        case 'q':
-            queue_size = strtol(optarg, NULL, 10);
-            printf("INFO: setting queue size as %ld\n", queue_size);
-            break;
-        case 'w':
-            worker_count = atoi(optarg);
-            printf("INFO: setting worker count as %d\n", worker_count);
+    case 'q':
+        queue_size = strtol(optarg, NULL, 10);
+        printf("INFO: setting queue size as %ld\n", queue_size);
+        break;
+    case 'w':
+        worker_count = atoi(optarg);
+        if (worker_count < 1) {
+            fprintf(stderr, "Worker count must be a positive integer.\n");
+            exit(EXIT_FAILURE);
+        }
+        printf("INFO: setting worker count as %d\n", worker_count);
+        break;
 	}
 
 	if (!queue_size) {
@@ -384,6 +414,7 @@ int main (int argc, char ** argv) {
 		ERROR_INFO();
 		fprintf(stderr, USAGE_STRING, argv[0]);
 		return EXIT_FAILURE;
+	}
 	}
 
 	/* Now onward to create the right type of socket */
