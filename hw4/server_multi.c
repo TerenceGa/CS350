@@ -264,20 +264,20 @@ int start_worker(pthread_t* p, void * params)
  * with the client is interrupted. */
 void handle_connection(int conn_socket, size_t queue_size)
 {
-	struct request_meta * req;
-	struct queue * the_queue;
-	size_t in_bytes;
+    struct request_meta * req;
+    struct queue * the_queue;
+    size_t in_bytes;
 
-	/* The connection with the client is alive here. Let's start
-	 * the worker thread. */
-	struct worker_params worker_params;
-	int worker_id;
+    /* The connection with the client is alive here. Let's start
+     * the worker thread. */
+    struct worker_params worker_params;
+    int worker_id;
 
-	/* Now handle queue allocation and initialization */
-	the_queue = (struct queue *)malloc(sizeof(struct queue));
-	queue_init(the_queue, queue_size);
+    /* Now handle queue allocation and initialization */
+    the_queue = (struct queue *)malloc(sizeof(struct queue));
+    queue_init(the_queue, queue_size);
 
-	pthread_t *threads = malloc(worker_count * sizeof(pthread_t));
+    pthread_t *threads = malloc(worker_count * sizeof(pthread_t));
     struct worker_params *params = malloc(worker_count * sizeof(struct worker_params));
 
 
@@ -307,57 +307,59 @@ void handle_connection(int conn_socket, size_t queue_size)
 
         printf("INFO: Worker thread %d started.\n", i);
     }
-	/* We are ready to proceed with the rest of the request
-	 * handling logic. */
+    /* We are ready to proceed with the rest of the request
+     * handling logic. */
 
-	req = (struct request_meta *)malloc(sizeof(struct request_meta));
+    req = (struct request_meta *)malloc(sizeof(struct request_meta));
 
-	do {
-		in_bytes = recv(conn_socket, &req->request, sizeof(struct request), 0);
-		clock_gettime(CLOCK_MONOTONIC, &req->receipt_timestamp);
+    do {
+        in_bytes = recv(conn_socket, &req->request, sizeof(struct request), 0);
+        clock_gettime(CLOCK_MONOTONIC, &req->receipt_timestamp);
 
-		/* Don't just return if in_bytes is 0 or -1. Instead
-		 * skip the response and break out of the loop in an
-		 * orderly fashion so that we can de-allocate the req
-		 * and resp varaibles, and shutdown the socket. */
-		if (in_bytes > 0) {
-			int res = add_to_queue(*req, the_queue);
+        /* Don't just return if in_bytes is 0 or -1. Instead
+         * skip the response and break out of the loop in an
+         * orderly fashion so that we can de-allocate the req
+         * and resp varaibles, and shutdown the socket. */
+        if (in_bytes > 0) {
+            int res = add_to_queue(*req, the_queue);
 
-			/* The queue is full if the return value is 1 */
-			if (res) {
-				struct response resp;
-				/* Now provide a response! */
-				resp.req_id = req->request.req_id;
-				resp.ack = RESP_REJECTED;
-				send(conn_socket, &resp, sizeof(struct response), 0);
+            /* The queue is full if the return value is 1 */
+            if (res) {
+                struct response resp;
+                /* Now provide a response! */
+                resp.req_id = req->request.req_id;
+                resp.ack = RESP_REJECTED;
+                send(conn_socket, &resp, sizeof(struct response), 0);
 
-				printf_m("X%ld:%lf,%lf,%lf\n", req->request.req_id,
-				       TSPEC_TO_DOUBLE(req->request.req_timestamp),
-				       TSPEC_TO_DOUBLE(req->request.req_length),
-				       TSPEC_TO_DOUBLE(req->receipt_timestamp)
-					);
+                printf_m("X%ld:%lf,%lf,%lf\n", req->request.req_id,
+                       TSPEC_TO_DOUBLE(req->request.req_timestamp),
+                       TSPEC_TO_DOUBLE(req->request.req_length),
+                       TSPEC_TO_DOUBLE(req->receipt_timestamp)
+                    );
 
-				dump_queue_status(the_queue);
-			}
-		}
-	} while (in_bytes > 0);
+                dump_queue_status(the_queue);
+            }
+        }
+    } while (in_bytes > 0);
 
-	/* Ask the worker thead to terminate */
-	printf("INFO: Asserting termination flag for worker thread...\n");
-	for (int i = 0; i < worker_count; i++) {
+    /* Ask the worker threads to terminate */
+    printf("INFO: Asserting termination flag for worker thread...\n");
+    for (int i = 0; i < worker_count; i++) {
         params[i].worker_done = 1;
     }
 
-	/* Make sure to wake-up any thread left stuck waiting for items in the queue. */
-	sem_post(queue_notify);
+    /* Make sure to wake-up all worker threads */
+    for (int i = 0; i < worker_count; i++) {
+        sem_post(queue_notify);
+    }
 
-	/* Wait for orderly termination of the worker thread */
+    /* Wait for orderly termination of the worker threads */
     for (int i = 0; i < worker_count; i++) {
         pthread_join(threads[i], NULL);
         printf("INFO: Worker thread %d has exited.\n", i);
     }
-	
-	printf("INFO: Worker threads exited.\n");
+
+    printf("INFO: Worker threads exited.\n");
 
     free(threads);
     free(params);
@@ -367,6 +369,7 @@ void handle_connection(int conn_socket, size_t queue_size)
     close(conn_socket);
     printf("INFO: Client disconnected.\n");
 }
+
 
 
 /* Template implementation of the main function for the FIFO
