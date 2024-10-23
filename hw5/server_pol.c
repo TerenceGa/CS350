@@ -112,6 +112,7 @@ void queue_init(struct queue * the_queue, size_t queue_size)
 	the_queue->requests = (struct request_meta *)malloc(sizeof(struct request_meta)
 						     * the_queue->max_size);
 	the_queue->available = queue_size;
+	the_queue->policy = policy;
 
 }
 
