@@ -266,6 +266,7 @@ void handle_connection(int conn_socket)
 
     /* Initialize the shared queue */
     the_queue = (struct queue *)malloc(sizeof(struct queue));
+    the_queue->meta_requests = malloc(queue_size * sizeof(struct meta_request));
     if (the_queue == NULL) {
         perror("Failed to allocate memory for the_queue");
         close(conn_socket);
