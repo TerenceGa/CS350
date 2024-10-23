@@ -83,6 +83,7 @@ struct queue {
 	size_t max_size;
 	size_t available;
 	struct request_meta * requests;
+	enum queue_policy policy;
 };
 
 struct connection_params {
@@ -398,7 +399,7 @@ void handle_connection(int conn_socket, struct connection_params conn_params)
 
 	/* Now handle queue allocation and initialization */
 	the_queue = (struct queue *)malloc(sizeof(struct queue));
-	queue_init(the_queue, conn_params.queue_size);
+	queue_init(the_queue, conn_params.queue_size, conn_params.policy);
 
 	common_worker_params.conn_socket = conn_socket;
 	common_worker_params.the_queue = the_queue;
