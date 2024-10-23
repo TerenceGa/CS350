@@ -104,7 +104,7 @@ enum worker_command {
 	WORKERS_STOP
 };
 
-void queue_init(struct queue * the_queue, size_t queue_size)
+void queue_init(struct queue * the_queue, size_t queue_size, enum queue_policy policy)
 {
 	the_queue->rd_pos = 0;
 	the_queue->wr_pos = 0;
@@ -474,7 +474,7 @@ int main (int argc, char ** argv) {
 	conn_params.workers = 1;
 
 	/* Parse all the command line arguments */
-	while((opt = getopt(argc, argv, "q:w:")) != -1) {
+	while((opt = getopt(argc, argv, "q:w:p:")) != -1) {
 		switch (opt) {
 		case 'q':
 			conn_params.queue_size = strtol(optarg, NULL, 10);
