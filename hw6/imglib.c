@@ -581,14 +581,10 @@ uint8_t saveBMP(const char* filename, const struct image* img) {
  */
 uint8_t sendImage(struct image* img, int sockfd) {
 
-	uint32_t net_width = htonl(img->width);
-    uint32_t net_height = htonl(img->height);
+
     char magic[3] = {'I', 'M', 'G'};
     size_t to_send = img->width * img->height * sizeof(uint32_t);
     char * bufptr = (char *)(img->pixels);
-	// Print both host and network byte order values
-    printf("Sending width: %u (network order: %u)\n", img->width, net_width);
-    printf("Sending height: %u (network order: %u)\n", img->height, net_height);
 
     /* Send the magic bytes */
     if (send(sockfd, magic, 3, 0) != 3) {
@@ -633,7 +629,6 @@ struct image * recvImage(int sockfd) {
 	size_t to_recv;
 	char * bufptr;
 	uint32_t width, height;
-	uint32_t net_width, net_height;
 	struct image * img = NULL;
 
 
@@ -648,12 +643,8 @@ struct image * recvImage(int sockfd) {
 		return NULL;
 	}
 
-	// Convert width and height from network byte order to host byte order
-    width = ntohl(net_width);
-    height = ntohl(net_height);
 
-    printf("Received width: %u (network order: %u)\n", width, net_width);
-    printf("Received height: %u (network order: %u)\n", height, net_height);
+
 
 	
 	/* Create a new image to fill up */
