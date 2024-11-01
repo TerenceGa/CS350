@@ -45,62 +45,7 @@ struct image {
 	uint32_t * pixels; /* Array of pixel values in x-y order */
 };
 
-struct image_entry {
-    uint64_t img_id;
-    struct image *img;
-    struct image_entry *next;
-};
 
-struct image_store {
-    struct image_entry *head;
-};
-
-struct image_store img_store;
-
-/* Initialize the image store */
-void image_store_init() {
-    img_store.head = NULL;
-}
-
-uint64_t generate_image_id() {
-    static uint64_t last_img_id = 0;
-    return ++last_img_id;
-}
-
-/* Add an image to the image store */
-void image_store_add(uint64_t img_id, struct image *img) {
-    struct image_entry *new_entry = malloc(sizeof(struct image_entry));
-    new_entry->img_id = img_id;
-    new_entry->img = img;
-    new_entry->next = img_store.head;
-    img_store.head = new_entry;
-}
-
-/* Get an image from the image store */
-struct image * image_store_get(uint64_t img_id) {
-    struct image_entry *current = img_store.head;
-    while (current != NULL) {
-        if (current->img_id == img_id) {
-            return current->img;
-        }
-        current = current->next;
-    }
-    return NULL;
-}
-
-/* Clean up the image store */
-void image_store_cleanup() {
-    struct image_entry *current = img_store.head;
-    while (current != NULL) {
-        struct image_entry *next = current->next;
-        /* Free the image */
-        deleteImage(current->img);
-        /* Free the entry */
-        free(current);
-        current = next;
-    }
-    img_store.head = NULL;
-}
 
 #pragma pack(push, 1)  // Ensure structure is packed
 
