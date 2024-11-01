@@ -1,17 +1,16 @@
 ###############################################################################
-# Makefile for Compiling Clock, TimeLib, Server, and Client Modules
+# Makefile for Compiling TimeLib, ImgLib, MD5Lib, and Server Modules
 #
 # Description:
 #     This Makefile is designed to compile various components, including:
-#     - CPU Clock measurement functions using RDTSC
 #     - TimeLib: A library for time-related operations
-#     - FIFO Order Server: Processes client requests in FIFO order
-#     - FIFO Order Client: Sends requests to the server
+#     - ImageLib: A library for image manipulation
+#     - MD5Lib: A library to compute MD5 hashes for images and memory buffers
+#     - Server: Processes client image manipulation requests in FIFO order
 #
 # Targets:
 #     - all: Compiles all modules
-#     - clock: Compiles the CPU clock measurement functions
-#     - server: Compiles the server executable
+#     - server_img: Compiles the server executable
 #     - clean: Removes compiled binaries and intermediate files
 #
 # Usage:
@@ -25,10 +24,7 @@
 #     Boston University
 #
 # Creation Date:
-#     September 10, 2023
-#
-# Last Update:
-#     September 9, 2024
+#     October 31, 2023
 #
 # Notes:
 #     Ensure you have the necessary dependencies and permissions before
@@ -38,9 +34,9 @@
 ###############################################################################
 
 
-TARGETS = clock server
-LIBS = timelib
-LDFLAGS = -lm
+TARGETS = server_img
+LIBS = timelib imglib md5sum
+LDFLAGS = -lm -lpthread -O0
 BUILDDIR = build
 BUILD_TARGETS = $(addprefix $(BUILDDIR)/,$(TARGETS))
 OBJS = $(addprefix $(BUILDDIR)/,$(addsuffix .o,$(TARGETS) $(LIBS)))

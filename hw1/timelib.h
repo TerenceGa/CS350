@@ -19,6 +19,9 @@
 *     refer to the accompanying documentation for detailed usage instructions.
 *
 *******************************************************************************/
+#ifndef __TIMELIB_H__
+#define __TIMELIB_H__
+/* DO NOT WRITE ANY CODE ABOVE THIS LINE*/
 
 #include <stdio.h>
 #include <string.h>
@@ -31,13 +34,16 @@
 #define NANO_IN_SEC (1000*1000*1000)
 
 /* Macro wrapper for RDTSC instruction */
-#define get_clocks(clocks)					\
-    do {    \
-        unsigned int lo, hi;                                \
-        __asm__ volatile ("rdtsc" : "=a" (lo), "=d" (hi));  \
-        (clocks) = ((uint64_t)(hi) << 32) | (lo);        \
-    } while(0)                                        
-
+#define get_clocks(clocks)						\
+	do {								\
+		uint32_t __clocks_hi, __clocks_lo;			\
+		__asm__ __volatile__("rdtsc" :				\
+				     "=a" (__clocks_lo),		\
+				     "=d" (__clocks_hi)			\
+			);						\
+		clocks = (((uint64_t)__clocks_hi) << 32) |		\
+			((uint64_t)__clocks_lo);			\
+	} while (0)
 
 /* Return the number of clock cycles elapsed when waiting for
  * wait_time seconds using sleeping functions */
@@ -56,3 +62,10 @@ void timespec_add (struct timespec *, struct timespec *);
 
 /* Compare two timespec structures with one another */
 int timespec_cmp(struct timespec *, struct timespec *);
+
+/* Translate a double timestamp into a valid timespec */
+struct timespec dtotspec(double timestamp);
+
+
+/* DO NOT WRITE ANY CODE BEYOND THIS LINE*/
+#endif
