@@ -25,7 +25,7 @@
 *******************************************************************************/
 
 #include "imglib.h"
-
+#include <arpa/inet.h> // Include for htonl and ntohl
 #define pix(img, x, y)				\
 	img->pixels[((y) * img->width) + (x)]
 
@@ -490,7 +490,7 @@ struct image* loadBMP(const char* filename) {
 		return NULL;
 	}
 
-	//printf("IMG: %d x %d x %d\n", infoHeader.width, infoHeader.height, infoHeader.bits);
+	printf("IMG: %d x %d x %d\n", infoHeader.width, infoHeader.height, infoHeader.bits);
 	struct image* img = createImage(infoHeader.width, infoHeader.height);
 	int padding = (4 - (infoHeader.width * 3) % 4) % 4;
 
@@ -581,12 +581,14 @@ uint8_t saveBMP(const char* filename, const struct image* img) {
  */
 uint8_t sendImage(struct image* img, int sockfd) {
 
-
+	uint32_t net_width = htonl(img->width);
+    uint32_t net_height = htonl(img->height);
     char magic[3] = {'I', 'M', 'G'};
     size_t to_send = img->width * img->height * sizeof(uint32_t);
     char * bufptr = (char *)(img->pixels);
-	printf("Sending width: %u (network order: %u)\n", img->width);
-	printf("Sending height: %u (network order: %u)\n", img->height);
+	// Print both host and network byte order values
+    printf("Sending width: %u (network order: %u)\n", img->width, net_width);
+    printf("Sending height: %u (network order: %u)\n", img->height, net_height);
 
     /* Send the magic bytes */
     if (send(sockfd, magic, 3, 0) != 3) {
@@ -645,10 +647,12 @@ struct image * recvImage(int sockfd) {
 		return NULL;
 	}
 
-	printf("Converted width: %u\n", width);
+	// Convert width and height from network byte order to host byte order
+    width = ntohl(net_width);
+    height = ntohl(net_height);
 
-
-	printf("Converted height: %u\n", height);
+    printf("Received width: %u (network order: %u)\n", width, net_width);
+    printf("Received height: %u (network order: %u)\n", height, net_height);
 
 	
 	/* Create a new image to fill up */
