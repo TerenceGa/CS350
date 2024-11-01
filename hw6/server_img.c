@@ -337,6 +337,7 @@ void * worker_main (void * arg)
                 processed_img = detectHorizontalEdges(original_img, &err);
                 break;
             case IMG_RETRIEVE:
+				uint8_t saveBMP(const char* filename, const struct image* img);
                 /* Send response */
                 resp.req_id = req.request.req_id;
                 resp.ack = RESP_COMPLETED;
