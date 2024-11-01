@@ -580,9 +580,13 @@ uint8_t saveBMP(const char* filename, const struct image* img) {
  * @return 0 on success, 1 on error.
  */
 uint8_t sendImage(struct image* img, int sockfd) {
+
+
     char magic[3] = {'I', 'M', 'G'};
     size_t to_send = img->width * img->height * sizeof(uint32_t);
     char * bufptr = (char *)(img->pixels);
+	printf("Sending width: %u (network order: %u)\n", img->width, width_net);
+	printf("Sending height: %u (network order: %u)\n", img->height, height_net);
 
     /* Send the magic bytes */
     if (send(sockfd, magic, 3, 0) != 3) {
@@ -629,6 +633,7 @@ struct image * recvImage(int sockfd) {
 	uint32_t width, height;
 	struct image * img = NULL;
 
+
 	/* Receive the magic bytes */
 	if (recv(sockfd, magic, 3, 0) != 3 || strncmp(magic, "IMG", 3) != 0) {
 		return NULL;
@@ -639,6 +644,13 @@ struct image * recvImage(int sockfd) {
 	    recv(sockfd, &(height), sizeof(uint32_t), 0) != sizeof(uint32_t)) {
 		return NULL;
 	}
+	printf("Received width_net: %u\n", img->width, width_net);
+	printf("Converted width: %u\n", width);
+
+	printf("Received height_net: %u\n", img->height, height_net);
+	printf("Converted height: %u\n", height);
+	
+	printf("Received pixel[%zu]: %u (host order: %u)\n", i, pixel_net, img->pixels[i]);
 
 	/* Create a new image to fill up */
 	img = createImage(width, height);
