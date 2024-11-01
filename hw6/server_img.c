@@ -575,134 +575,137 @@ int control_workers(enum worker_command cmd, size_t worker_count,
  * with the client is interrupted. */
 void handle_connection(int conn_socket, struct connection_params conn_params)
 {
-	struct request_meta * req;
-	struct queue * the_queue;
-	size_t in_bytes;
+    struct request_meta *req;
+    struct queue *the_queue;
+    size_t in_bytes;
 
-	/* The connection with the client is alive here. Let's start
-	 * the worker thread. */
-	struct worker_params common_worker_params;
-	int res;
+    /* The connection with the client is alive here. Let's start
+     * the worker thread. */
+    struct worker_params common_worker_params;
+    int res;
 
-	/* Now handle queue allocation and initialization */
-	the_queue = (struct queue *)malloc(sizeof(struct queue));
-	queue_init(the_queue, conn_params.queue_size, conn_params.queue_policy);
+    /* Now handle queue allocation and initialization */
+    the_queue = (struct queue *)malloc(sizeof(struct queue));
+    queue_init(the_queue, conn_params.queue_size, conn_params.queue_policy);
 
-	common_worker_params.conn_socket = conn_socket;
-	common_worker_params.the_queue = the_queue;
-	res = control_workers(WORKERS_START, conn_params.workers, &common_worker_params);
+    common_worker_params.conn_socket = conn_socket;
+    common_worker_params.the_queue = the_queue;
+    res = control_workers(WORKERS_START, conn_params.workers, &common_worker_params);
 
-	/* Do not continue if there has been a problem while starting
-	 * the workers. */
-	if (res != EXIT_SUCCESS) {
-		free(the_queue);
+    /* Do not continue if there has been a problem while starting
+     * the workers. */
+    if (res != EXIT_SUCCESS) {
+        free(the_queue);
 
-		/* Stop any worker that was successfully started */
-		control_workers(WORKERS_STOP, conn_params.workers, NULL);
-		return;
-	}
-
-	/* We are ready to proceed with the rest of the request
-	 * handling logic. */
-
-	req = (struct request_meta *)malloc(sizeof(struct request_meta));
-
-	do {
-		in_bytes = recv(conn_socket, &req->request, sizeof(struct request), 0);
-		clock_gettime(CLOCK_MONOTONIC, &req->receipt_timestamp);
-
-		/* Don't just return if in_bytes is 0 or -1. Instead
-		 * skip the response and break out of the loop in an
-		 * orderly fashion so that we can de-allocate the req
-		 * and resp varaibles, and shutdown the socket. */
-		if (in_bytes > 0) {
-
-			/* IMPLEMENT ME! Check right away if the
-			 * request has img_op set to IMG_REGISTER. If
-			 * so, handle the operation right away,
-			 * reading in the full image payload, replying
-			 * to the server, and bypassing the queue.
-			 (
-				Don't forget to send a response back to the client after
-			  registering an image :) 
-			 )
-			  */
-			if (req->request.img_op == IMG_REGISTER) {
-			clock_gettime(CLOCK_MONOTONIC, &req->start_timestamp);
-			struct image *img = recvImage(conn_socket);
-			struct response resp;
-
-			if (!img) {
-				// Handle error
-				resp.req_id = req->request.req_id;
-				resp.ack = RESP_REJECTED;
-				resp.img_id = 0;
-				send(conn_socket, &resp, sizeof(struct response), 0);
-			} else {
-				// Always generate a new unique image ID
-				uint64_t new_img_id = generate_image_id();
-
-				// Store the image in the image store
-				image_store_add(new_img_id, img);
-
-				// Send response back to client
-				resp.req_id = req->request.req_id;
-				resp.ack = RESP_COMPLETED;
-				resp.img_id = new_img_id;
-				send(conn_socket, &resp, sizeof(struct response), 0);
+        /* Stop any worker that was successfully started */
+        control_workers(WORKERS_STOP, conn_params.workers, NULL);
+        return;
     }
 
-        // Record completion timestamp
-        clock_gettime(CLOCK_MONOTONIC, &req->completion_timestamp);
+    /* We are ready to proceed with the rest of the request
+     * handling logic. */
 
-        // Log the request processing
-        sync_printf("T%d R%ld:%lf,%s,%d,%ld,%ld,%lf,%lf,%lf\n",
-            0, // Assign worker ID 0 for main thread
-            req->request.req_id,
-            TSPEC_TO_DOUBLE(req->request.req_timestamp),
-            OPCODE_TO_STRING(req->request.img_op),
-            req->request.overwrite,
-            req->request.img_id,  // Client img_id (may be 0 or as sent by client)
-            resp.img_id,          // Server img_id
-            TSPEC_TO_DOUBLE(req->receipt_timestamp),
-            TSPEC_TO_DOUBLE(req->start_timestamp),
-            TSPEC_TO_DOUBLE(req->completion_timestamp));
+    req = (struct request_meta *)malloc(sizeof(struct request_meta));
+    if (!req) {
+        perror("Failed to allocate memory for request_meta");
+        // Handle error: cleanup and return
+        control_workers(WORKERS_STOP, conn_params.workers, NULL);
+        close(conn_socket);
+        return;
     }
-    continue;
+
+    do {
+        in_bytes = recv(conn_socket, &req->request, sizeof(struct request), 0);
+        clock_gettime(CLOCK_MONOTONIC, &req->receipt_timestamp);
+
+        /* Don't just return if in_bytes is 0 or -1. Instead
+         * skip the response and break out of the loop in an
+         * orderly fashion so that we can de-allocate the req
+         * and resp variables, and shutdown the socket. */
+        if (in_bytes > 0) {
+
+            /* Check if the request has img_op set to IMG_REGISTER.
+             * If so, handle the operation right away,
+             * reading in the full image payload, replying
+             * to the client, and bypassing the queue.
+             */
+            if (req->request.img_op == IMG_REGISTER) {
+                clock_gettime(CLOCK_MONOTONIC, &req->start_timestamp);
+                struct image *img = recvImage(conn_socket);
+                struct response resp;
+
+                if (!img) {
+                    // Handle error
+                    resp.req_id = req->request.req_id;
+                    resp.ack = RESP_REJECTED;
+                    resp.img_id = 0;
+                    send(conn_socket, &resp, sizeof(struct response), 0);
+                } else {
+                    // Always generate a new unique image ID
+                    uint64_t new_img_id = generate_image_id();
+
+                    // Store the image in the image store
+                    image_store_add(new_img_id, img);
+
+                    // Send response back to client
+                    resp.req_id = req->request.req_id;
+                    resp.ack = RESP_COMPLETED;
+                    resp.img_id = new_img_id;
+                    send(conn_socket, &resp, sizeof(struct response), 0);
+                }
+
+                // Record completion timestamp
+                clock_gettime(CLOCK_MONOTONIC, &req->completion_timestamp);
+
+                // Log the request processing
+                sync_printf("T%d R%ld:%lf,%s,%d,%ld,%ld,%lf,%lf,%lf\n",
+                    0, // Assign worker ID 0 for main thread
+                    req->request.req_id,
+                    TSPEC_TO_DOUBLE(req->request.req_timestamp),
+                    OPCODE_TO_STRING(req->request.img_op),
+                    req->request.overwrite,
+                    req->request.img_id,  // Client img_id (may be 0 or as sent by client)
+                    resp.img_id,          // Server img_id
+                    TSPEC_TO_DOUBLE(req->receipt_timestamp),
+                    TSPEC_TO_DOUBLE(req->start_timestamp),
+                    TSPEC_TO_DOUBLE(req->completion_timestamp));
+
+                continue; // Only skip queue addition for IMG_REGISTER
+            }
+
+            // For all other img_op types, add to queue
+            res = add_to_queue(*req, the_queue);
+
+            /* The queue is full if the return value is 1 */
+            if (res) {
+                struct response resp;
+                /* Now provide a response! */
+                resp.req_id = req->request.req_id;
+                resp.ack = RESP_REJECTED;
+                resp.img_id = 0; // Set to 0 or an error code
+                send(conn_socket, &resp, sizeof(struct response), 0);
+
+                sync_printf("X%ld:%lf,%s,%d,%ld,%lf\n",
+                    req->request.req_id,
+                    TSPEC_TO_DOUBLE(req->request.req_timestamp),
+                    OPCODE_TO_STRING(req->request.img_op),
+                    req->request.overwrite,
+                    req->request.img_id,
+                    TSPEC_TO_DOUBLE(req->receipt_timestamp));
+            }
+        }
+    } while (in_bytes > 0);
+
+    /* Stop all the worker threads. */
+    control_workers(WORKERS_STOP, conn_params.workers, NULL);
+
+    free(req);
+    shutdown(conn_socket, SHUT_RDWR);
+    image_store_cleanup();
+    close(conn_socket);
+    printf("INFO: Client disconnected.\n");
 }
-			res = add_to_queue(*req, the_queue);
 
-			/* The queue is full if the return value is 1 */
-			if (res) {
-            struct response resp;
-            /* Now provide a response! */
-            resp.req_id = req->request.req_id;
-            resp.ack = RESP_REJECTED;
-            resp.img_id = 0; // Set to 0 or an error code
-            send(conn_socket, &resp, sizeof(struct response), 0);
-
-            sync_printf("X%ld:%lf,%s,%d,%ld,%lf\n",
-            req->request.req_id,
-            TSPEC_TO_DOUBLE(req->request.req_timestamp),
-            OPCODE_TO_STRING(req->request.img_op),
-            req->request.overwrite,
-            req->request.img_id,
-            TSPEC_TO_DOUBLE(req->receipt_timestamp));
-
-			}
-		}
-	} while (in_bytes > 0);
-
-
-	/* Stop all the worker threads. */
-	control_workers(WORKERS_STOP, conn_params.workers, NULL);
-
-	free(req);
-	shutdown(conn_socket, SHUT_RDWR);
-	image_store_cleanup();
-	close(conn_socket);
-	printf("INFO: Client disconnected.\n");
-}
 
 
 /* Template implementation of the main function for the FIFO
