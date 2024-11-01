@@ -176,6 +176,21 @@ struct image * image_store_get(uint64_t img_id) {
     return NULL;
 }
 
+void image_store_update(uint64_t img_id, struct image *new_img) {
+    struct image_entry *current = img_store.head;
+    while (current != NULL) {
+        if (current->img_id == img_id) {
+            /* Delete the old image */
+            deleteImage(current->img);
+            /* Update with the new image */
+            current->img = new_img;
+            return;
+        }
+        current = current->next;
+    }
+    /* If image ID not found, you might want to handle this case */
+}
+
 /* Clean up the image store */
 void image_store_cleanup() {
     struct image_entry *current = img_store.head;
