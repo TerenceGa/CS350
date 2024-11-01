@@ -181,10 +181,12 @@ struct image * image_store_get(uint64_t img_id) {
     struct image_entry *current = img_store.head;
     while (current != NULL) {
         if (current->img_id == img_id) {
+			printf("Found image with ID %ld\n", img_id);
             return current->img;
         }
         current = current->next;
     }
+	printf("Image with ID %ld not found\n", img_id);
     return NULL;
 }
 
@@ -192,6 +194,7 @@ void image_store_update(uint64_t img_id, struct image *new_img) {
     struct image_entry *current = img_store.head;
     while (current != NULL) {
         if (current->img_id == img_id) {
+			printf("Updating image with ID %ld\n", img_id);
             // Delete the old image
             deleteImage(current->img);
             // Update with the new image
