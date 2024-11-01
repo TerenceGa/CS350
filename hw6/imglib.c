@@ -633,6 +633,7 @@ struct image * recvImage(int sockfd) {
 	size_t to_recv;
 	char * bufptr;
 	uint32_t width, height;
+	uint32_t net_width, net_height;
 	struct image * img = NULL;
 
 
