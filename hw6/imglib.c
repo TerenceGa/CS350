@@ -650,8 +650,7 @@ struct image * recvImage(int sockfd) {
 
 	printf("Converted height: %u\n", height);
 
-	printf("Received pixel[%zu]: %u (host order: %u)\n", i, pixel_net, img->pixels[i]);
-
+	
 	/* Create a new image to fill up */
 	img = createImage(width, height);
 	to_recv = img->width * img->height * sizeof(uint32_t);
