@@ -155,8 +155,20 @@ uint64_t generate_image_id() {
     return ++last_img_id;
 }
 
-/* Add an image to the image store */
 void image_store_add(uint64_t img_id, struct image *img) {
+    // Check if image with img_id already exists
+    struct image_entry *current = img_store.head;
+    while (current != NULL) {
+        if (current->img_id == img_id) {
+            // Image ID already exists, update the image
+            deleteImage(current->img);
+            current->img = img;
+            return;
+        }
+        current = current->next;
+    }
+
+    // If img_id not found, add new entry
     struct image_entry *new_entry = malloc(sizeof(struct image_entry));
     new_entry->img_id = img_id;
     new_entry->img = img;
@@ -180,15 +192,15 @@ void image_store_update(uint64_t img_id, struct image *new_img) {
     struct image_entry *current = img_store.head;
     while (current != NULL) {
         if (current->img_id == img_id) {
-            /* Delete the old image */
+            // Delete the old image
             deleteImage(current->img);
-            /* Update with the new image */
+            // Update with the new image
             current->img = new_img;
             return;
         }
         current = current->next;
     }
-    /* If image ID not found, you might want to handle this case */
+    // Optional: Handle case where img_id is not found
 }
 
 /* Clean up the image store */
@@ -337,17 +349,29 @@ void * worker_main (void * arg)
                 processed_img = detectHorizontalEdges(original_img, &err);
                 break;
             case IMG_RETRIEVE:
-				resp.req_id = req.request.req_id;
-				resp.ack = RESP_COMPLETED;
-				resp.img_id = req.request.img_id;
-				send(params->conn_socket, &resp, sizeof(struct response), 0);
+			/* Send response */
+			resp.req_id = req.request.req_id;
+			resp.ack = RESP_COMPLETED;
+			resp.img_id = req.request.img_id;
+			send(params->conn_socket, &resp, sizeof(struct response), 0);
 
-				/* Save the image before sending */
-				saveBMP("retrieved_image.bmp", original_img);
+			/* Retrieve the latest image */
+			original_img = image_store_get(req.request.img_id);
 
-				/* Now send the image */
-				sendImage(original_img, params->conn_socket);
-				goto end_processing;
+			if (!original_img) {
+				// Handle error: Image not found
+				break;
+			}
+
+			/* Save the image before sending (for testing) */
+			char filename[256];
+			snprintf(filename, sizeof(filename), "retrieved_image_%ld.bmp", req.request.img_id);
+			saveBMP(filename, original_img);
+
+			/* Now send the image */
+			sendImage(original_img, params->conn_socket);
+			goto end_processing;
+
             default:
                 /* Unknown operation */
                 resp.req_id = req.request.req_id;
@@ -367,15 +391,15 @@ void * worker_main (void * arg)
         }
 
         if (req.request.overwrite) {
-            /* Overwrite the original image */
-            image_store_update(req.request.img_id, processed_img);
-            resp.img_id = req.request.img_id;
-        } else {
-            /* Create a new image ID */
-            uint64_t new_img_id = generate_image_id();
-            image_store_add(new_img_id, processed_img);
-            resp.img_id = new_img_id;
-        }
+			/* Overwrite the original image */
+			image_store_update(req.request.img_id, processed_img);
+			resp.img_id = req.request.img_id;
+		} else {
+			/* Create a new image ID */
+			uint64_t new_img_id = generate_image_id();
+			image_store_add(new_img_id, processed_img);
+			resp.img_id = new_img_id;
+		}
 
         /* Prepare and send the response */
         resp.req_id = req.request.req_id;
@@ -604,28 +628,48 @@ void handle_connection(int conn_socket, struct connection_params conn_params)
 			 )
 			  */
 			if (req->request.img_op == IMG_REGISTER) {
-            struct image *img = recvImage(conn_socket);
-            if (!img) {
-                /* Error receiving image */
-                struct response resp;
-                resp.req_id = req->request.req_id;
-                resp.ack = RESP_REJECTED; // Or define an error code
-                resp.img_id = 0; // Set to 0 or an error code
-                send(conn_socket, &resp, sizeof(struct response), 0);
-            }else{
-				/* Generate a unique image ID */
-                uint64_t new_img_id = generate_image_id();
-                /* Store the image in the image store */
-                image_store_add(new_img_id, img);
-                /* Send response back to client */
-                struct response resp;
-                resp.req_id = req->request.req_id;
-                resp.ack = RESP_COMPLETED;
-                resp.img_id = new_img_id;
-                send(conn_socket, &resp, sizeof(struct response), 0);
-			}
-			continue;
-			}
+			clock_gettime(CLOCK_MONOTONIC, &req->start_timestamp);
+			struct image *img = recvImage(conn_socket);
+			struct response resp;
+
+			if (!img) {
+				// Handle error
+				resp.req_id = req->request.req_id;
+				resp.ack = RESP_REJECTED;
+				resp.img_id = 0;
+				send(conn_socket, &resp, sizeof(struct response), 0);
+			} else {
+				// Always generate a new unique image ID
+				uint64_t new_img_id = generate_image_id();
+
+				// Store the image in the image store
+				image_store_add(new_img_id, img);
+
+				// Send response back to client
+				resp.req_id = req->request.req_id;
+				resp.ack = RESP_COMPLETED;
+				resp.img_id = new_img_id;
+				send(conn_socket, &resp, sizeof(struct response), 0);
+    }
+
+        // Record completion timestamp
+        clock_gettime(CLOCK_MONOTONIC, &req->completion_timestamp);
+
+        // Log the request processing
+        sync_printf("T%d R%ld:%lf,%s,%d,%ld,%ld,%lf,%lf,%lf\n",
+            0, // Assign worker ID 0 for main thread
+            req->request.req_id,
+            TSPEC_TO_DOUBLE(req->request.req_timestamp),
+            OPCODE_TO_STRING(req->request.img_op),
+            req->request.overwrite,
+            req->request.img_id,  // Client img_id (may be 0 or as sent by client)
+            resp.img_id,          // Server img_id
+            TSPEC_TO_DOUBLE(req->receipt_timestamp),
+            TSPEC_TO_DOUBLE(req->start_timestamp),
+            TSPEC_TO_DOUBLE(req->completion_timestamp));
+    }
+    continue;
+}
 			res = add_to_queue(*req, the_queue);
 
 			/* The queue is full if the return value is 1 */
