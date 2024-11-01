@@ -337,16 +337,17 @@ void * worker_main (void * arg)
                 processed_img = detectHorizontalEdges(original_img, &err);
                 break;
             case IMG_RETRIEVE:
-				uint8_t saveBMP(const char* filename, const struct image* img);
-                /* Send response */
-                resp.req_id = req.request.req_id;
-                resp.ack = RESP_COMPLETED;
-                resp.img_id = req.request.img_id;
-                send(params->conn_socket, &resp, sizeof(struct response), 0);
+				resp.req_id = req.request.req_id;
+				resp.ack = RESP_COMPLETED;
+				resp.img_id = req.request.img_id;
+				send(params->conn_socket, &resp, sizeof(struct response), 0);
 
-                /* Now send the image */
-                sendImage(original_img, params->conn_socket);
-                goto end_processing;
+				/* Save the image before sending */
+				saveBMP("retrieved_image.bmp", original_img);
+
+				/* Now send the image */
+				sendImage(original_img, params->conn_socket);
+				goto end_processing;
             default:
                 /* Unknown operation */
                 resp.req_id = req.request.req_id;
