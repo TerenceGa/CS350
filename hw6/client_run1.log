@@ -1,0 +1,6 @@
+Unable to open directory: No such file or directory
+[#CLIENT#] INFO: CS350 Client Version 4.1
+Runtime error at client.c:578
+[#CLIENT#] No images in specified folder or unable to read all images. Folder: [images_small/]
+Missing or invalid parameter. Exiting.
+Usage: ./client [-a <arrival rate>] [-s <service rate>] [-n <nr. of packets>] [-P <request script>] [-I <images folder>] <port number>
