@@ -1,70 +1,85 @@
 #!/bin/bash
 
-# Paths to the server and client executables
-SERVER="./build/server_img"
-CLIENT="./client"
+# ======================================================================
+# Script: run_experiments.sh
+# Description: Automates the execution of two server-client experiments,
+#              capturing logs for each run.
+# ======================================================================
 
-# Calculate a unique port number based on your user ID
-SERVER_PORT=$((50000 + $(id -u) % 10000))
+# ------------------------------ Variables ------------------------------
 
-# First experiment parameters
-QUEUE_SIZE=100
-CLIENT_ARRIVAL_RATE=30
-CLIENT_IMAGE_DIR="images_small/"
-CLIENT_NUM_REQUESTS=1000
+# Server and client command templates
+SERVER_CMD="./build/server_img -q 100 2222"
+CLIENT_CMD="./client"
 
-# Second experiment parameters
-CLIENT_IMAGE_DIR_ALL="images_all/"
+# Connection parameters
+PORT=2222
+ARRIVAL_RATE=30
+NUM_REQUESTS=1000
 
-# Output files
-SERVER_LOG1="server_run1.log"
-CLIENT_LOG1="client_run1.log"
+# Image directories
+IMAGES_SMALL="images_small/"
+IMAGES_ALL="images_all/"
 
-SERVER_LOG2="server_run2.log"
-CLIENT_LOG2="client_run2.log"
+# Log directory and file names
+LOG_DIR="logs"
+RUN1_SERVER_LOG="$LOG_DIR/run1_server.log"
+RUN1_CLIENT_LOG="$LOG_DIR/run1_client.log"
+RUN2_SERVER_LOG="$LOG_DIR/run2_server.log"
+RUN2_CLIENT_LOG="$LOG_DIR/run2_client.log"
 
-# Function to start the server
-start_server() {
-    echo "Starting server..."
-    # Kill any existing server processes owned by the user
-    pkill -u $(whoami) -f server_img
-    sleep 1
-    $SERVER -q $QUEUE_SIZE $SERVER_PORT > $1 2>&1 &
+# Ensure the log directory exists
+mkdir -p "$LOG_DIR"
+
+# ---------------------------- Functions -------------------------------
+
+# Function to run a single experiment
+run_experiment() {
+    local run_num=$1
+    local image_dir=$2
+    local server_log=$3
+    local client_log=$4
+
+    echo "============================================================"
+    echo "Starting RUN${run_num} with image directory: $image_dir"
+    echo "------------------------------------------------------------"
+
+    # Start the server in the background, redirecting output to server_log
+    $SERVER_CMD > "$server_log" 2>&1 &
     SERVER_PID=$!
-    sleep 1  # Give time for the server to attempt to bind
-    if ! kill -0 $SERVER_PID 2>/dev/null; then
-        echo "Server failed to start. Check the log file $1 for details."
-        exit 1
-    fi
-    echo "Server started with PID $SERVER_PID"
+    echo "Server started with PID $SERVER_PID. Logging to $server_log"
+
+    # Wait for the server to initialize
+    sleep 2
+
+    # Run the client and redirect output to client_log
+    echo "Running client with parameters: -a $ARRIVAL_RATE -I $image_dir -n $NUM_REQUESTS $PORT"
+    $CLIENT_CMD -a "$ARRIVAL_RATE" -I "$image_dir" -n "$NUM_REQUESTS" "$PORT" > "$client_log" 2>&1
+    echo "Client completed. Logging to $client_log"
+
+    # Shutdown the server gracefully
+    echo "Shutting down server with PID $SERVER_PID"
+    kill "$SERVER_PID"
+
+    # Wait for the server process to terminate
+    wait "$SERVER_PID" 2>/dev/null
+    echo "Server with PID $SERVER_PID has been terminated."
+    echo "============================================================"
+    echo ""
 }
 
-# Function to run the client
-run_client() {
-    echo "Running client..."
-    $CLIENT -a $CLIENT_ARRIVAL_RATE -I $1 -n $CLIENT_NUM_REQUESTS $SERVER_PORT > $2 2>&1
-    echo "Client finished."
-}
+# ------------------------------ Execution -----------------------------
 
-# Function to stop the server
-stop_server() {
-    echo "Stopping server..."
-    kill -9 $SERVER_PID 2>/dev/null
-    wait $SERVER_PID 2>/dev/null
-    sleep 1  # Wait for sockets to close
-    echo "Server stopped."
-}
+# Run 1: Using images_small/ directory
+run_experiment 1 "$IMAGES_SMALL" "$RUN1_SERVER_LOG" "$RUN1_CLIENT_LOG"
 
-# Run first experiment
-echo "Running first experiment with images_small..."
-start_server $SERVER_LOG1
-run_client $CLIENT_IMAGE_DIR $CLIENT_LOG1
-stop_server
+# Run 2: Using images_all/ directory
+run_experiment 2 "$IMAGES_ALL" "$RUN2_SERVER_LOG" "$RUN2_CLIENT_LOG"
 
-# Run second experiment
-echo "Running second experiment with images_all..."
-start_server $SERVER_LOG2
-run_client $CLIENT_IMAGE_DIR_ALL $CLIENT_LOG2
-stop_server
-
-echo "Experiments completed."
+# Completion message
+echo "All experiments completed successfully."
+echo "Logs are available in the '$LOG_DIR' directory:"
+echo " - RUN1 Server Log: $RUN1_SERVER_LOG"
+echo " - RUN1 Client Log: $RUN1_CLIENT_LOG"
+echo " - RUN2 Server Log: $RUN2_SERVER_LOG"
+echo " - RUN2 Client Log: $RUN2_CLIENT_LOG"

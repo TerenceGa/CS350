@@ -1,4 +1,0 @@
-INFO: setting queue size = 100
-INFO: setting server port as: 2222
-Runtime error at server_img.c:817
-Unable to bind socket: Address already in use
