@@ -453,30 +453,31 @@ void handle_connection(int conn_socket, struct connection_params conn_params) {
             struct response resp;
 
             if (req->request.img_op == IMG_REGISTER) {
-                uint64_t current_img_id = image_array->count;
-                struct image *img = recvImage(conn_socket);
-                dynamic_array_add(image_array, img);
+            uint64_t current_img_id = image_array->count;
+            struct image *img = recvImage(conn_socket);
+            dynamic_array_add(image_array, img);
 
-                if (!result) {
-                    resp.img_id = current_img_id;
-                    resp.req_id = req->request.req_id;
-                    resp.ack = RESP_COMPLETED;
-                    send(conn_socket, &resp, sizeof(struct response), 0);
+            if (!result) {
+                resp.img_id = current_img_id;
+                resp.req_id = req->request.req_id;
+                resp.ack = RESP_COMPLETED;
+                send(conn_socket, &resp, sizeof(struct response), 0);
 
-                    synchronized_printf("T%lu R%ld:%lf,%s,%d,%lu,%lu,%lf,%lf,%lf\n",
-                                        conn_params.workers,
-                                        req->request.req_id,
-                                        TSPEC_TO_DOUBLE(req->request.req_timestamp),
-                                        OPCODE_TO_STRING(req->request.img_op),
-                                        req->request.overwrite,
-                                        req->request.img_id,
-                                        req->request.img_id,
-                                        TSPEC_TO_DOUBLE(req->receipt_time),
-                                        TSPEC_TO_DOUBLE(req->start_time),
-                                        TSPEC_TO_DOUBLE(req->completion_time));
-                }
-                next_img_id++;
-            } else {
+                // Log the server-assigned img_id instead of the client-provided img_id
+                synchronized_printf("T%lu R%ld:%lf,%s,%d,%lu,%lu,%lf,%lf,%lf\n",
+                                    conn_params.workers,
+                                    req->request.req_id,
+                                    TSPEC_TO_DOUBLE(req->request.req_timestamp),
+                                    OPCODE_TO_STRING(req->request.img_op),
+                                    req->request.overwrite,
+                                    resp.img_id, // Use server-assigned img_id
+                                    resp.img_id, // Use server-assigned img_id
+                                    TSPEC_TO_DOUBLE(req->receipt_time),
+                                    TSPEC_TO_DOUBLE(req->start_time),
+                                    TSPEC_TO_DOUBLE(req->completion_time));
+            }
+            next_img_id++;
+        } else {
                 result = queue_add(*req, queue);
 
                 if (result) {
