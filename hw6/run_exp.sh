@@ -24,6 +24,9 @@ CLIENT_LOG2="client_run2.log"
 # Function to start the server
 start_server() {
     echo "Starting server..."
+    # Kill any existing server processes
+    pkill -f server_img
+    sleep 1
     $SERVER -q $QUEUE_SIZE $SERVER_PORT > $1 2>&1 &
     SERVER_PID=$!
     echo "Server started with PID $SERVER_PID"
@@ -39,8 +42,9 @@ run_client() {
 # Function to stop the server
 stop_server() {
     echo "Stopping server..."
-    kill $SERVER_PID
+    kill -9 $SERVER_PID
     wait $SERVER_PID 2>/dev/null
+    sleep 2  # Wait for sockets to close
     echo "Server stopped."
 }
 
