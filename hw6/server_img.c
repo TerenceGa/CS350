@@ -68,7 +68,6 @@
 /* Mutex needed to protect the threaded printf. DO NOT TOUCH */
 sem_t * printf_mutex;
 
-
 /* Synchronized printf for multi-threaded operation */
 #define sync_printf(...)			\
 	do {					\
@@ -114,6 +113,7 @@ struct worker_params {
 	int worker_done;
 	struct queue * the_queue;
 	int worker_id;
+	struct dynamic_array * the_array; //the array that will store the images
 };
 
 enum worker_command {
@@ -121,7 +121,55 @@ enum worker_command {
 	WORKERS_STOP
 };
 
+struct dynamic_array {
+	struct image **img_array;  // Dynamic array of image pointers
+	size_t array_capacity;
+	size_t image_count;
+};
 
+/*
+struct image **image_array = NULL;  // Dynamic array of image pointers
+size_t array_capacity = 10; //init capacity
+size_t image_count = 0;
+*/
+/* request related paramters */
+volatile uint64_t next_img_id = 0; //global because client might want to create a new id if overwrite = 0
+
+
+//array helper
+void array_init(struct dynamic_array * the_array, size_t init_capacity) { 
+	the_array->img_array = malloc(init_capacity * sizeof(struct image *));
+	the_array->array_capacity = init_capacity;
+	the_array->image_count = 0;
+}
+
+void add_image(struct dynamic_array *the_array, struct image *img) {
+	if (the_array->image_count >= the_array->array_capacity) {
+		the_array->array_capacity *= 2;
+		the_array->img_array = realloc(the_array->img_array, the_array->array_capacity * sizeof(struct image *));
+	}
+	the_array->img_array[the_array->image_count] = img;
+	the_array->image_count++;
+}
+
+//assumes no images are being removed
+struct image *get_image(struct dynamic_array *the_array, uint64_t img_id) {
+	if (img_id >= the_array->image_count) {
+		return NULL;  // Invalid img_id
+	}
+	return the_array->img_array[img_id];
+}
+
+//free everything before terminating
+void free_image_array(struct dynamic_array *the_array) {
+	for (size_t i = 0; i < the_array->image_count; i++) {
+		free(the_array->img_array[i]->pixels); 	//pixels 
+		free(the_array->img_array[i]);		//image arrays
+	}
+	free(the_array->img_array);			
+}
+
+//////
 void queue_init(struct queue * the_queue, size_t queue_size, enum queue_policy policy)
 {
 	the_queue->rd_pos = 0;
@@ -132,80 +180,6 @@ void queue_init(struct queue * the_queue, size_t queue_size, enum queue_policy p
 	the_queue->available = queue_size;
 	the_queue->policy = policy;
 }
-
-struct image_entry {
-    uint64_t img_id;
-    struct image *img;
-    struct image_entry *next;
-};
-
-struct image_store {
-    struct image_entry *head;
-};
-
-struct image_store img_store;
-
-/* Initialize the image store */
-void image_store_init() {
-    img_store.head = NULL;
-}
-
-uint64_t generate_image_id() {
-    static uint64_t last_img_id = 0;
-    return ++last_img_id;
-}
-
-/* Add an image to the image store */
-void image_store_add(uint64_t img_id, struct image *img) {
-    struct image_entry *new_entry = malloc(sizeof(struct image_entry));
-    new_entry->img_id = img_id;
-    new_entry->img = img;
-    new_entry->next = img_store.head;
-    img_store.head = new_entry;
-}
-
-/* Get an image from the image store */
-struct image * image_store_get(uint64_t img_id) {
-    struct image_entry *current = img_store.head;
-    while (current != NULL) {
-        if (current->img_id == img_id) {
-            return current->img;
-        }
-        current = current->next;
-    }
-    return NULL;
-}
-
-void image_store_update(uint64_t img_id, struct image *new_img) {
-    struct image_entry *current = img_store.head;
-    while (current != NULL) {
-        if (current->img_id == img_id) {
-            /* Delete the old image */
-            deleteImage(current->img);
-            /* Update with the new image */
-            current->img = new_img;
-            return;
-        }
-        current = current->next;
-    }
-    /* If image ID not found, you might want to handle this case */
-}
-
-/* Clean up the image store */
-void image_store_cleanup() {
-    struct image_entry *current = img_store.head;
-    while (current != NULL) {
-        struct image_entry *next = current->next;
-        /* Free the image */
-        deleteImage(current->img);
-        /* Free the entry */
-        free(current);
-        current = next;
-    }
-    img_store.head = NULL;
-}
-
-
 
 /* Add a new request <request> to the shared queue <the_queue> */
 int add_to_queue(struct request_meta to_add, struct queue * the_queue)
@@ -282,129 +256,137 @@ void dump_queue_status(struct queue * the_queue)
 	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
 }
 
+/* Main logic of the worker thread */
 void * worker_main (void * arg)
 {
-    struct timespec now;
-    struct worker_params * params = (struct worker_params *)arg;
+	struct timespec now;
+	struct worker_params * params = (struct worker_params *)arg;
 
-    /* Print the first alive message. */
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    sync_printf("[#WORKER#] %lf Worker Thread Alive!\n", TSPEC_TO_DOUBLE(now));
+	/* Print the first alive message. */
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	sync_printf("[#WORKER#] %lf Worker Thread Alive!\n", TSPEC_TO_DOUBLE(now));
 
-    /* Okay, now execute the main logic. */
-    while (!params->worker_done) {
+	/* Okay, now execute the main logic. */
+	while (!params->worker_done) {
+		struct image *requested_image; //image to work on
+		struct image *modified_image;
+		uint8_t opretval = 0;
+		uint8_t process_overwrite = 1;
 
-        struct request_meta req;
-        struct response resp;
-        req = get_from_queue(params->the_queue);
+		uint64_t client_id;
+		uint64_t server_id;
 
-        /* Detect wakeup after termination asserted */
-        if (params->worker_done)
-            break;
+		struct request_meta req;
+		struct response resp;
+		req = get_from_queue(params->the_queue);
+		//set image ids
+		client_id = req.request.img_id;
+		server_id = client_id;
 
-        clock_gettime(CLOCK_MONOTONIC, &req.start_timestamp);
+		/* Detect wakeup after termination asserted */
+		if (params->worker_done)
+			break;
 
-        /* Process the client's request for image processing */
-        uint8_t err = 0;
-        struct image *original_img = NULL;
-        struct image *processed_img = NULL;
+		clock_gettime(CLOCK_MONOTONIC, &req.start_timestamp);
+		requested_image = get_image(params->the_array, req.request.img_id);
 
-        original_img = image_store_get(req.request.img_id);
+		/* IMPLEMENT ME! Take the necessary steps to process
+		 * the client's request for image processing. */
+		
+		//1. get image, 2. do work on image, 3. check overwrite field, if true, replace image at original id, else give it a new id
+		switch (req.request.img_op){
+			//img rotate	
+			case IMG_ROT90CLKW:
+				modified_image = rotate90Clockwise(requested_image, &opretval);	
+				break;
+	
+			case IMG_SHARPEN:
+				modified_image = sharpenImage(requested_image, &opretval);	
+				break;
 
-        if (original_img == NULL) {
-            /* Image not found */
-            resp.req_id = req.request.req_id;
-            resp.ack = RESP_REJECTED; // Or define a specific error code
-            resp.img_id = req.request.img_id;
-            send(params->conn_socket, &resp, sizeof(struct response), 0);
-            goto end_processing;
-        }
+			case IMG_BLUR:
+				modified_image = blurImage(requested_image, &opretval);	
+				break;	
 
-        switch (req.request.img_op) {
-            case IMG_ROT90CLKW:
-                processed_img = rotate90Clockwise(original_img, &err);
-                break;
-            case IMG_BLUR:
-                processed_img = blurImage(original_img, &err);
-                break;
-            case IMG_SHARPEN:
-                processed_img = sharpenImage(original_img, &err);
-                break;
-            case IMG_VERTEDGES:
-                processed_img = detectVerticalEdges(original_img, &err);
-                break;
-            case IMG_HORIZEDGES:
-                processed_img = detectHorizontalEdges(original_img, &err);
-                break;
-            case IMG_RETRIEVE:
-				resp.req_id = req.request.req_id;
-				resp.ack = RESP_COMPLETED;
-				resp.img_id = req.request.img_id;
-				send(params->conn_socket, &resp, sizeof(struct response), 0);
+			case IMG_VERTEDGES:
+				modified_image = detectVerticalEdges(requested_image, &opretval);	
+				break;
 
-				/* Save the image before sending */
-				saveBMP("retrieved_image.bmp", original_img);
+			case IMG_HORIZEDGES:
+				modified_image = detectHorizontalEdges(requested_image, &opretval);	
+				break;
+			case IMG_RETRIEVE:
+				//handle this case later to go through outro
+				//another solution: handle here and change overwrite to 0 since we know that overwrite will never be anything other than 1
+				//ignore overwrite
+				process_overwrite = 0;
+				break;
+			//requested opcode cannot be handled
+			default:
+				printf("Error: Unknown operation code %d.\n", req.request.img_op);
+				return NULL;
 
-				/* Now send the image */
-				sendImage(original_img, params->conn_socket);
-				goto end_processing;
-            default:
-                /* Unknown operation */
-                resp.req_id = req.request.req_id;
-                resp.ack = RESP_REJECTED; // Or define an error code
-                resp.img_id = req.request.img_id;
-                send(params->conn_socket, &resp, sizeof(struct response), 0);
-                goto end_processing;
-        }
+		}
 
-        if (err || processed_img == NULL) {
-            /* Error during image processing */
-            resp.req_id = req.request.req_id;
-            resp.ack = RESP_REJECTED; // Or define a specific error code
-            resp.img_id = req.request.img_id;
-            send(params->conn_socket, &resp, sizeof(struct response), 0);
-            goto end_processing;
-        }
+		clock_gettime(CLOCK_MONOTONIC, &req.completion_timestamp);
 
-        if (req.request.overwrite) {
-            /* Overwrite the original image */
-            image_store_update(req.request.img_id, processed_img);
-            resp.img_id = req.request.img_id;
-        } else {
-            /* Create a new image ID */
-            uint64_t new_img_id = generate_image_id();
-            image_store_add(new_img_id, processed_img);
-            resp.img_id = new_img_id;
-        }
+		/* IMPLEMENT ME! Set the img_id field for the response
+		 * here, if necessary. */
+		//image retrive, ignore overwrite field completely.
+		if (process_overwrite) {
+			//3.handle the decision to replace last
+			//if overwrite is 1, replace image at img_id of requested image
+			//if overwrite is 0, create new image
+			if (req.request.overwrite){
+				free(requested_image->pixels);
+				free(requested_image);
+				params->the_array->img_array[req.request.img_id] = modified_image;
 
-        /* Prepare and send the response */
-        resp.req_id = req.request.req_id;
-        resp.ack = RESP_COMPLETED;
+			} else {
+				//create new img_id
+				//do not free anything
+				//create a new id for an image and place it in the array
+				//change server_id
+			}
+		}
+		//outro
+
+		/* Now provide a response! */
+		resp.req_id = req.request.req_id;
+		resp.img_id = req.request.img_id;
+		resp.ack = RESP_COMPLETED; //always accepted, rejections only occur in parent
+
+		
+		//correct order
+		if (req.request.img_op == IMG_RETRIEVE) {
+			/* testing
+			printf("image saved\n");
+			saveBMP("file",requested_image);
+			*/
+			sendImage(requested_image, params->conn_socket);
+		
+		}
         send(params->conn_socket, &resp, sizeof(struct response), 0);
+		/* IMPLEMENT ME! Print out the post-processing status
+		 * report. */
+		sync_printf("T%d R%ld:%lf,%s,%d,%lu,%lu,%lf,%lf,%lf\n",
+		       params->worker_id,
+		       req.request.req_id,
+		       TSPEC_TO_DOUBLE(req.request.req_timestamp),
+		       OPCODE_TO_STRING(req.request.img_op),
+		       req.request.overwrite,
+		       client_id, //client
+		       server_id, //server
+		       TSPEC_TO_DOUBLE(req.receipt_timestamp),
+		       TSPEC_TO_DOUBLE(req.start_timestamp),
+		       TSPEC_TO_DOUBLE(req.completion_timestamp)
+			);
 
-    end_processing:
-        clock_gettime(CLOCK_MONOTONIC, &req.completion_timestamp);
+		dump_queue_status(params->the_queue);
+	}
 
-        /* Print out the post-processing status report */
-        sync_printf("T%d R%ld:%lf,%s,%d,%ld,%ld,%lf,%lf,%lf\n",
-            params->worker_id,
-            req.request.req_id,
-            TSPEC_TO_DOUBLE(req.request.req_timestamp),
-            OPCODE_TO_STRING(req.request.img_op),
-            req.request.overwrite,
-            req.request.img_id,  // Client img_id
-            resp.img_id,         // Server img_id
-            TSPEC_TO_DOUBLE(req.receipt_timestamp),
-            TSPEC_TO_DOUBLE(req.start_timestamp),
-            TSPEC_TO_DOUBLE(req.completion_timestamp));
-
-
-        dump_queue_status(params->the_queue);
-    }
-
-    return NULL;
+	return NULL;
 }
-
 
 
 /* This function will start/stop all the worker threads wrapping
@@ -455,6 +437,7 @@ int control_workers(enum worker_command cmd, size_t worker_count,
 
 			worker_params[i]->conn_socket = common_params->conn_socket;
 			worker_params[i]->the_queue = common_params->the_queue;
+			worker_params[i]->the_array = common_params->the_array;
 			worker_params[i]->worker_done = 0;
 			worker_params[i]->worker_id = i;
 		}
@@ -559,13 +542,20 @@ void handle_connection(int conn_socket, struct connection_params conn_params)
 	 * the worker thread. */
 	struct worker_params common_worker_params;
 	int res;
+	//array
+	struct dynamic_array * the_array;
 
 	/* Now handle queue allocation and initialization */
 	the_queue = (struct queue *)malloc(sizeof(struct queue));
 	queue_init(the_queue, conn_params.queue_size, conn_params.queue_policy);
 
+	//intialize array that will hold images
+	the_array = (struct dynamic_array *)malloc(sizeof(struct dynamic_array));
+	array_init(the_array, 10);
+
 	common_worker_params.conn_socket = conn_socket;
 	common_worker_params.the_queue = the_queue;
+	common_worker_params.the_array = the_array; //the array that will hold images, give it to all the workers
 	res = control_workers(WORKERS_START, conn_params.workers, &common_worker_params);
 
 	/* Do not continue if there has been a problem while starting
@@ -603,59 +593,86 @@ void handle_connection(int conn_socket, struct connection_params conn_params)
 			  registering an image :) 
 			 )
 			  */
-			if (req->request.img_op == IMG_REGISTER) {
-            struct image *img = recvImage(conn_socket);
-            if (!img) {
-                /* Error receiving image */
-                struct response resp;
-                resp.req_id = req->request.req_id;
-                resp.ack = RESP_REJECTED; // Or define an error code
-                resp.img_id = 0; // Set to 0 or an error code
-                send(conn_socket, &resp, sizeof(struct response), 0);
-            }else{
-				/* Generate a unique image ID */
-                uint64_t new_img_id = generate_image_id();
-                /* Store the image in the image store */
-                image_store_add(new_img_id, img);
-                /* Send response back to client */
-                struct response resp;
-                resp.req_id = req->request.req_id;
-                resp.ack = RESP_COMPLETED;
-                resp.img_id = new_img_id;
-                send(conn_socket, &resp, sizeof(struct response), 0);
-			}
-			continue;
-			}
-			res = add_to_queue(*req, the_queue);
+			//handle IMG_REGISTER OP code
+			//is always done, doesn't matter if queue is full
 
-			/* The queue is full if the return value is 1 */
-			if (res) {
-            struct response resp;
-            /* Now provide a response! */
-            resp.req_id = req->request.req_id;
-            resp.ack = RESP_REJECTED;
-            resp.img_id = 0; // Set to 0 or an error code
-            send(conn_socket, &resp, sizeof(struct response), 0);
+			//1.recv image,2. give image id,3. send response that image has been registered
+			//IMG_REGISTER handled entirely in parent including case where ack or nack
+			//global for all op_codes
+			struct response resp;
+			//dont add to queue, therefore always accepted
+			// IMG_REGISTER is not added to the queue therefore it cannot be processed by the worker
+			// all of operations will be added to the queue therefore they will be processed by the workers
+			if (req->request.img_op == IMG_REGISTER){
+				//recv actual image
+				uint64_t current_img_id = the_array->image_count; //will be incremented after an image is added
+				struct image *img = recvImage(conn_socket); 
+				//add image to array
+				add_image(the_array, img);
 
-            sync_printf("X%ld:%lf,%s,%d,%ld,%lf\n",
-            req->request.req_id,
-            TSPEC_TO_DOUBLE(req->request.req_timestamp),
-            OPCODE_TO_STRING(req->request.img_op),
-            req->request.overwrite,
-            req->request.img_id,
-            TSPEC_TO_DOUBLE(req->receipt_timestamp));
+				//send response to client
+				if (!res) { //handle accepted requests only
+					resp.img_id = current_img_id; //create new image id
+					resp.req_id = req->request.req_id;
+					resp.ack = RESP_COMPLETED; //0 if accepted 1 if rejected
+					send(conn_socket, &resp, sizeof(struct response), 0);
 
+					//print out
+					sync_printf("T%lu R%ld:%lf,%s,%d,%lu,%lu,%lf,%lf,%lf\n",
+						conn_params.workers,
+						req->request.req_id,
+						TSPEC_TO_DOUBLE(req->request.req_timestamp),
+						OPCODE_TO_STRING(req->request.img_op),
+						req->request.overwrite,
+						req->request.img_id, //client
+						req->request.img_id, //server
+						TSPEC_TO_DOUBLE(req->receipt_timestamp),
+						TSPEC_TO_DOUBLE(req->start_timestamp),
+						TSPEC_TO_DOUBLE(req->completion_timestamp)
+						);
+					//
+
+					/* testing
+					struct image *registered_image = get_image(the_array, current_img_id);
+					if (registered_image) {
+						printf("Width: %u, Height: %u\n", registered_image->width, registered_image->height);
+						//saveBMP("file_1",registered_image);
+					} 
+					else {
+						printf("Failed to retrieve image %zu.\n", current_img_id);
+					}
+					*/
+				}
+				next_img_id++; //next id
+			} else {
+				res = add_to_queue(*req, the_queue);
+				//handle rejections in parent since workers cant access a request when the queue is full
+				// reject if queue is full
+				/* The queue is full if the return value is 1 */
+				if (res) { //respond when rejects only because we want to handle accepted responses in worker
+					//resp.img_id already changed if we are doing IMG_REGISTER
+					resp.req_id = req->request.req_id;
+					resp.ack = RESP_REJECTED;
+					send(conn_socket, &resp, sizeof(struct response), 0);
+
+					sync_printf("X%ld:%lf,%lf,%lf\n", req->request.req_id,
+					       TSPEC_TO_DOUBLE(req->request.req_timestamp),
+					       TSPEC_TO_DOUBLE(req->request.req_length),
+					       TSPEC_TO_DOUBLE(req->receipt_timestamp)
+						);
+				}
 			}
+
 		}
 	} while (in_bytes > 0);
 
 
 	/* Stop all the worker threads. */
 	control_workers(WORKERS_STOP, conn_params.workers, NULL);
-
+	
+	free_image_array(the_array);
 	free(req);
 	shutdown(conn_socket, SHUT_RDWR);
-	image_store_cleanup();
 	close(conn_socket);
 	printf("INFO: Client disconnected.\n");
 }
@@ -796,9 +813,6 @@ int main (int argc, char ** argv) {
 		return EXIT_FAILURE;
 	}
 	/* DONE - Initialize queue protection variables */
-
-	// Initialize the image store
-	image_store_init();
 
 	/* Ready to handle the new connection with the client. */
 	handle_connection(accepted, conn_params);
