@@ -358,7 +358,7 @@ void * worker_main (void * arg)
         }
 
         // Print out the required output including event name and count
-        printf("T%d R%ld:%lf,%s,%d,%ld,%ld,%lf,%lf,%lf,%s,%ld\n",
+        sync_printf("T%d R%ld:%lf,%s,%d,%ld,%ld,%lf,%lf,%lf,%s,%ld\n",
                params->worker_id, req.request.req_id,
                TSPEC_TO_DOUBLE(req.request.req_timestamp),
                OPCODE_TO_STRING(req.request.img_op),
