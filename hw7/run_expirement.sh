@@ -3,14 +3,14 @@
 # Filename: run_experiment.sh
 
 # Configuration
-SERVER_CMD="./build/server_img_perf -q 1000 -h INSTR 2222"
-CLIENT_CMD="./client -a 30 -I images/ -n 1000 2222"
+SERVER_CMD="./build/server_img_perf -q 1000 -h INSTR 4444"
+CLIENT_CMD="./client -a 30 -I images/ -n 1000 4444"
 SERVER_LOG="server_log.txt"
 CLIENT_LOG="client_log.txt"
 
 # Optional: Adjust parameters if machine is weak
 # Uncomment the following lines to reduce the number of requests
-# CLIENT_CMD="./build/client -a 15 -I images/ -n 500 2222"
+# CLIENT_CMD="./build/client -a 15 -I images/ -n 500 4444"
 
 # Clean previous logs if they exist
 echo "Cleaning previous logs..."
