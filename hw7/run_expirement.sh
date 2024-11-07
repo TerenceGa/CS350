@@ -4,7 +4,7 @@
 
 # Configuration
 SERVER_CMD="./build/server_img_perf -q 1000 -h INSTR 2222"
-CLIENT_CMD="./build/client -a 30 -I images/ -n 1000 2222"
+CLIENT_CMD="./client -a 30 -I images/ -n 1000 2222"
 SERVER_LOG="server_log.txt"
 CLIENT_LOG="client_log.txt"
 

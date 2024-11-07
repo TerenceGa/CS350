@@ -1,0 +1,7 @@
+Missing parameter. Exiting.
+Usage: ./build/server_img_perf -q <queue size> -w <workers: 1> -p <policy: FIFO> <port_number>
+INFO: setting queue size = 1000
+INFO: profiling INSTR (CPU instructions)
+INFO: setting server port as: 2222
+Runtime error at server_img_perf.c:736
+Unable to bind socket: Address already in use
