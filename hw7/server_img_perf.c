@@ -243,133 +243,138 @@ void register_new_image(int conn_socket, struct request * req)
 /* Main logic of the worker thread */
 void * worker_main (void * arg)
 {
+    struct timespec now;
+    struct worker_params * params = (struct worker_params *)arg;
 
-	struct timespec now;
-	struct worker_params * params = (struct worker_params *)arg;
+    // Print the first alive message.
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    sync_printf("[#WORKER#] %lf Worker Thread Alive!\n", TSPEC_TO_DOUBLE(now));
 
-	/* Print the first alive message. */
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	sync_printf("[#WORKER#] %lf Worker Thread Alive!\n", TSPEC_TO_DOUBLE(now));
-
-			int evt_fd = setup_perf_counter(params->perf_type, params->perf_config);
-    	if (evt_fd < 0) {
+    // Set up and enable the performance counter
+    int evt_fd = setup_perf_counter(params->perf_type, params->perf_config);
+    if (evt_fd < 0) {
         ERROR_INFO();
         perror("Failed to set up performance counter");
         pthread_exit(NULL);
     }
-	/* Okay, now execute the main logic. */
-	while (!params->worker_done) {
+    ioctl(evt_fd, PERF_EVENT_IOC_RESET, 0); // Reset counter to zero
+    ioctl(evt_fd, PERF_EVENT_IOC_ENABLE, 0); // Enable the counter
 
-		struct request_meta req;
-		struct response resp;
-		struct image * img = NULL;
-		uint64_t img_id;
-		req = get_from_queue(params->the_queue);
+    // Main logic loop
+    while (!params->worker_done) {
+        struct request_meta req;
+        struct response resp;
+        struct image * img = NULL;
+        uint64_t img_id;
+        uint64_t before_count, after_count, event_count;
 
-		/* Detect wakeup after termination asserted */
-		if (params->worker_done)
-			break;
+        req = get_from_queue(params->the_queue);
 
-		clock_gettime(CLOCK_MONOTONIC, &req.start_timestamp);
+        // Detect wakeup after termination asserted
+        if (params->worker_done)
+            break;
 
-		img_id = req.request.img_id;
-		/* Find the image to work on */
-		img = images[img_id];
+        clock_gettime(CLOCK_MONOTONIC, &req.start_timestamp);
 
-		assert(img != NULL);
+        img_id = req.request.img_id;
+        // Find the image to work on
+        img = images[img_id];
 
-		/*
-		TODO: Add infrastructure to enable/read hardware counters
-		via perflib.
-		 */
-			
-		ioctl(evt_fd, PERF_EVENT_IOC_RESET, 0);
-		ioctl(evt_fd, PERF_EVENT_IOC_ENABLE, 0);
+        assert(img != NULL);
 
-		switch (req.request.img_op) {
-		case IMG_ROT90CLKW:
-			img = rotate90Clockwise(img, NULL);
-			break;
-		case IMG_BLUR:
-		    img = blurImage(img, NULL);
-			break;
-		case IMG_SHARPEN:
-		    img = sharpenImage(img, NULL);
-			break;
-		case IMG_VERTEDGES:
-		    img = detectVerticalEdges(img, NULL);
-			break;
-		case IMG_HORIZEDGES:
-		    img = detectHorizontalEdges(img, NULL);
-			break;
-		}
-		ioctl(evt_fd, PERF_EVENT_IOC_DISABLE, 0);
-		uint64_t event_count = read_perf_counter(evt_fd);
+        // Sample before the operation
+        before_count = read_perf_counter(evt_fd);
 
-		if (req.request.img_op != IMG_RETRIEVE) {
-			if (req.request.overwrite) {
-				/* Deallocate the previous image */
-				deleteImage(images[img_id]);
-				/* Overwrite the pointer with the one to the new image */
-				images[img_id] = img;
-			} else {
-				/* Generate new ID and Increase the # of registered images */
-				img_id = image_count++;
-				/* Reallocate array of image pointers */
-				images = realloc(images, image_count * sizeof(struct image *));
-				/* Store its pointer at the end of the global array */
-				images[img_id] = img;
-			}
-		}
+        // Perform the image operation
+        switch (req.request.img_op) {
+            case IMG_ROT90CLKW:
+                img = rotate90Clockwise(img, NULL);
+                break;
+            case IMG_BLUR:
+                img = blurImage(img, NULL);
+                break;
+            case IMG_SHARPEN:
+                img = sharpenImage(img, NULL);
+                break;
+            case IMG_VERTEDGES:
+                img = detectVerticalEdges(img, NULL);
+                break;
+            case IMG_HORIZEDGES:
+                img = detectHorizontalEdges(img, NULL);
+                break;
+        }
 
-		clock_gettime(CLOCK_MONOTONIC, &req.completion_timestamp);
+        // Sample after the operation
+        after_count = read_perf_counter(evt_fd);
+        event_count = after_count - before_count;
 
-		/* Now provide a response! */
-		resp.req_id = req.request.req_id;
-		resp.ack = RESP_COMPLETED;
-		resp.img_id = img_id;
+        if (req.request.img_op != IMG_RETRIEVE) {
+            if (req.request.overwrite) {
+                // Deallocate the previous image
+                deleteImage(images[img_id]);
+                // Overwrite the pointer with the one to the new image
+                images[img_id] = img;
+            } else {
+                // Generate new ID and Increase the # of registered images
+                img_id = image_count++;
+                // Reallocate array of image pointers
+                images = realloc(images, image_count * sizeof(struct image *));
+                // Store its pointer at the end of the global array
+                images[img_id] = img;
+            }
+        }
 
-		send(params->conn_socket, &resp, sizeof(struct response), 0);
+        clock_gettime(CLOCK_MONOTONIC, &req.completion_timestamp);
 
-		/* In case of IMG_RETRIEVE, we need to send out the
-		 * actual image payload! */
-		if (req.request.img_op == IMG_RETRIEVE) {
-			uint8_t err = sendImage(img, params->conn_socket);
+        // Now provide a response!
+        resp.req_id = req.request.req_id;
+        resp.ack = RESP_COMPLETED;
+        resp.img_id = img_id;
 
-			if(err) {
-				ERROR_INFO();
-				perror("Unable to send image payload to client.");
-			}
-		}
-		char *event_name;
-		if (params->perf_type == PERF_TYPE_HARDWARE && params->perf_config == PERF_COUNT_HW_INSTRUCTIONS) {
-    	event_name = "INSTR";
-		} else if (params->perf_type == PERF_TYPE_HW_CACHE && 
-				params->perf_config == (PERF_COUNT_HW_CACHE_L1D | (PERF_COUNT_HW_CACHE_OP_READ << 8) | (PERF_COUNT_HW_CACHE_RESULT_MISS << 16))) {
-			event_name = "L1MISS";
-		} else if (params->perf_type == PERF_TYPE_HW_CACHE && 
-				params->perf_config == (PERF_COUNT_HW_CACHE_LL | (PERF_COUNT_HW_CACHE_OP_READ << 8) | (PERF_COUNT_HW_CACHE_RESULT_MISS << 16))) {
-			event_name = "LLCMISS";
-		} else {
-			event_name = "UNKNOWN";
-		}
+        send(params->conn_socket, &resp, sizeof(struct response), 0);
 
-		
+        // In case of IMG_RETRIEVE, we need to send out the actual image payload!
+        if (req.request.img_op == IMG_RETRIEVE) {
+            uint8_t err = sendImage(img, params->conn_socket);
 
-		printf("T%d R%ld:%lf,%s,%d,%ld,%ld,%lf,%lf,%lf,%s,%ld\n",
-			params->worker_id, req.request.req_id,
-			TSPEC_TO_DOUBLE(req.request.req_timestamp),
-			OPCODE_TO_STRING(req.request.img_op),
-			req.request.overwrite, req.request.img_id, img_id,
-			TSPEC_TO_DOUBLE(req.receipt_timestamp),
-			TSPEC_TO_DOUBLE(req.start_timestamp),
-			TSPEC_TO_DOUBLE(req.completion_timestamp),
-			event_name, event_count);
+            if(err) {
+                ERROR_INFO();
+                perror("Unable to send image payload to client.");
+            }
+        }
 
-		dump_queue_status(params->the_queue);
-	}
-	close(evt_fd);
-	return NULL;
+        // Determine the event name
+        char *event_name;
+        if (params->perf_type == PERF_TYPE_HARDWARE && params->perf_config == PERF_COUNT_HW_INSTRUCTIONS) {
+            event_name = "INSTR";
+        } else if (params->perf_type == PERF_TYPE_HW_CACHE && 
+                   params->perf_config == (PERF_COUNT_HW_CACHE_L1D | (PERF_COUNT_HW_CACHE_OP_READ << 8) | (PERF_COUNT_HW_CACHE_RESULT_MISS << 16))) {
+            event_name = "L1MISS";
+        } else if (params->perf_type == PERF_TYPE_HW_CACHE && 
+                   params->perf_config == (PERF_COUNT_HW_CACHE_LL | (PERF_COUNT_HW_CACHE_OP_READ << 8) | (PERF_COUNT_HW_CACHE_RESULT_MISS << 16))) {
+            event_name = "LLCMISS";
+        } else {
+            event_name = "UNKNOWN";
+        }
+
+        // Print out the required output including event name and count
+        printf("T%d R%ld:%lf,%s,%d,%ld,%ld,%lf,%lf,%lf,%s,%ld\n",
+               params->worker_id, req.request.req_id,
+               TSPEC_TO_DOUBLE(req.request.req_timestamp),
+               OPCODE_TO_STRING(req.request.img_op),
+               req.request.overwrite, req.request.img_id, img_id,
+               TSPEC_TO_DOUBLE(req.receipt_timestamp),
+               TSPEC_TO_DOUBLE(req.start_timestamp),
+               TSPEC_TO_DOUBLE(req.completion_timestamp),
+               event_name, event_count);
+
+        dump_queue_status(params->the_queue);
+    }
+
+    // Clean up the performance counter
+    close(evt_fd);
+
+    return NULL;
 }
 
 /* This function will start/stop all the worker threads wrapping
