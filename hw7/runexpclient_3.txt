@@ -1,0 +1,12 @@
+[#CLIENT#] INFO: CS350 Client Version 4.2
+[#CLIENT#] INFO: Reading BMP 0: test1.bmp | HASH = 9f3363f0249c15163d52e60fd9544c31
+[#CLIENT#] INFO: Reading BMP 1: test2.bmp | HASH = b6770726558da9722136ce84f12bfac8
+[#CLIENT#] INFO: Reading BMP 2: test3.bmp | HASH = f2ac174476fb2be614e8ab1ae10e82f0
+[#CLIENT#] INFO: Reading BMP 3: test4.bmp | HASH = 0caaef67aee1775ffca8eda02bd85f25
+[#CLIENT#] INFO: Reading BMP 4: test5.bmp | HASH = 5597b44eaee51bd81292d711c86a3380
+[#CLIENT#] INFO: Reading BMP 5: test6.bmp | HASH = 11552ac97535bd4433891b63ed1dd45d
+[#CLIENT#] INFO: setting client port as: 3333
+[#CLIENT#] INFO: setting distribution: 0
+[#CLIENT#] INFO: Initiating connection...
+Runtime error at client.c:726
+[#CLIENT#] ERROR: Is the server alive using port 3333?
