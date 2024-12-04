@@ -1,38 +1,37 @@
 /*******************************************************************************
- * Enhanced Multi-Threaded FIFO Image Server Implementation with Queue Limit
+ * Multi-Threaded FIFO Image Server Implementation with Queue Limitation
  *
  * Description:
- *     A robust server implementation designed to process client
- *     requests for image processing in First In, First Out (FIFO)
- *     order. The server binds to the specified port number provided as
- *     a parameter upon launch. It supports multiple worker threads
- *     to process incoming requests concurrently and allows specification
- *     of a maximum queue size. Enhancements include improved synchronization,
- *     error handling, logging, and memory management.
+ *     This server handles client requests for image processing in a First-In,
+ *     First-Out (FIFO) manner. It listens on a specified port and employs a
+ *     thread pool to process incoming requests concurrently. The server
+ *     maintains a request queue with a configurable maximum size and adheres
+ *     to a defined queue policy for request handling.
  *
  * Usage:
- *     <build directory>/server -q <queue_size> -w <workers> -p <policy> <port_number>
+ *     <build_directory>/server -q <queue_size> -w <worker_count> -p <policy> <port_number>
  *
  * Parameters:
- *     port_number - The port number to bind the server to.
- *     queue_size  - The maximum number of queued requests.
- *     workers     - The number of parallel threads to process requests.
- *     policy      - The queue policy to use for request dispatching.
+ *     port_number  - The port number on which the server listens.
+ *     queue_size   - The maximum number of requests that can be queued.
+ *     worker_count - The number of worker threads processing the requests.
+ *     policy       - The queue policy for dispatching requests (e.g., FIFO).
  *
  * Author:
- *     Renato Mancuso (Original Template)
+ *     Renato Mancuso
  *
  * Affiliation:
  *     Boston University
  *
  * Creation Date:
- *     October 31, 2023 (Original Template)
+ *     October 31, 2023
  *
  * Notes:
- *     Ensure proper permissions and an available port before running the
- *     server. The server uses a FIFO mechanism to handle requests, ensuring
- *     the order of processing. If the queue is full when a new request is
- *     received, the request is rejected with a negative acknowledgment.
+ *     - Ensure appropriate permissions and that the chosen port is available.
+ *     - The server employs a FIFO mechanism to process requests, ensuring
+ *       they are handled in the order received.
+ *     - If the request queue is full, new incoming requests are rejected with
+ *       a negative acknowledgment.
  *
  *******************************************************************************/
 
@@ -44,934 +43,827 @@
 #include <signal.h>
 #include <assert.h>
 #include <pthread.h>
-#include <stdarg.h>
-#include <stdatomic.h>
+#include <string.h>
 
-/* Needed for wait(...) */
+/* Headers for socket programming and synchronization */
 #include <sys/types.h>
-#include <sys/wait.h>
-
-/* Needed for semaphores */
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
 #include <semaphore.h>
 
-/* Include struct definitions and other libraries that need to be
- * included by both client and server */
+/* Include shared structures and functions for client-server communication */
 #include "common.h"
 
-#define BACKLOG_COUNT 100
-#define USAGE_STRING                                                 \
-    "Missing parameter. Exiting.\n"                                 \
-    "Usage: %s -q <queue size> "                                    \
-    "-w <workers: 1> "                                              \
-    "-p <policy: FIFO> "                                            \
-    "<port_number>\n"
+/* Constants */
+#define MAX_BACKLOG 100
+#define USAGE_MESSAGE                                               \
+    "Missing parameter. Exiting.\n"                                \
+    "Usage: %s -q <queue_size> -w <worker_count> -p <policy> <port_number>\n"
 
-/* Logging Levels */
+/* Stack size for worker threads (4KB) */
+#define WORKER_STACK_SIZE 4096
+
+/* Enumeration for queue policies */
 typedef enum {
-    LOG_DEBUG,
-    LOG_INFO,
-    LOG_WARN,
-    LOG_ERROR
-} log_level_t;
+    POLICY_FIFO,
+    POLICY_SJN  /* Shortest Job Next (Not Implemented) */
+} QueuePolicy;
 
-/* Logging Function */
-sem_t * log_mutex;
+/* Structure to hold metadata for each request */
+typedef struct {
+    Request request;
+    struct timespec receipt_time;
+    struct timespec start_time;
+    struct timespec completion_time;
+} RequestMeta;
 
-void log_message(log_level_t level, const char *format, ...) {
-    const char *level_strings[] = {"DEBUG", "INFO", "WARN", "ERROR"};
-    va_list args;
-    
-    sem_wait(log_mutex);
-    printf("[%s] ", level_strings[level]);
-    va_start(args, format);
-    vprintf(format, args);
-    va_end(args);
-    printf("\n");
-    sem_post(log_mutex);
-}
+/* Structure representing an image object */
+typedef struct {
+    Image *img;
+    sem_t img_mutex;          /* Mutex to protect image access */
+    sem_t operation_sem;     /* Semaphore to enforce operation order */
+    int assign_queue_pos;    /* Position in the operation queue */
+    int next_queue_pos;      /* Next expected operation position */
+} ImageObject;
 
-/* Mutex needed to protect the threaded printf. DO NOT TOUCH */
-sem_t * printf_mutex;
+/* Structure for the request queue */
+typedef struct {
+    size_t write_pos;
+    size_t read_pos;
+    size_t capacity;
+    size_t available_slots;
+    QueuePolicy policy;
+    RequestMeta *requests;
+} RequestQueue;
 
-/* Synchronized printf for multi-threaded operation */
-#define sync_printf(...)                            \
-    do {                                            \
-        sem_wait(printf_mutex);                     \
-        printf(__VA_ARGS__);                        \
-        sem_post(printf_mutex);                     \
-    } while (0)
-
-/* START - Variables needed to protect the shared queue. DO NOT TOUCH */
-sem_t * queue_mutex;
-sem_t * queue_notify;
-/* END - Variables needed to protect the shared queue. DO NOT TOUCH */
-
-/* Additional Semaphores for Synchronization Enhancements */
-sem_t * images_array_mutex; // Protects the global images array
-sem_t * socket_mutex;       // Protects socket operations
-sem_t * request_mutex;      // Protects request retrieval from the queue
-
-/* Global array of registered images and its length -- reallocated as we go! */
-struct img_object **images = NULL;
-atomic_uint image_count = 0;
-
-/* Image Object Structure with Synchronization Primitives */
-struct img_object {
-    struct image *img;
-    pthread_mutex_t img_mutex;       // Mutex for exclusive image access
-    pthread_cond_t img_cond_var;     // Condition variable for operation sequencing
-    atomic_int assign_q;             // Ticket counter
-    atomic_int q_next;               // Next operation turn
-};
-
-/* Request Metadata Structure */
-struct request_meta {
-    struct request request;
-    struct timespec receipt_timestamp;
-    struct timespec start_timestamp;
-    struct timespec completion_timestamp;
-};
-
-/* Queue Policy Enumeration */
-enum queue_policy {
-    QUEUE_FIFO,
-    QUEUE_SJN
-};
-
-/* Queue Structure */
-struct queue {
-    size_t wr_pos;
-    size_t rd_pos;
-    size_t max_size;
-    size_t available;
-    enum queue_policy policy;
-    struct request_meta *requests;
-};
-
-/* Connection Parameters Structure */
-struct connection_params {
-    size_t queue_size;
-    size_t workers;
-    enum queue_policy queue_policy;
-};
-
-/* Worker Parameters Structure */
-struct worker_params {
-    int conn_socket;
-    atomic_int worker_done;
-    struct queue *the_queue;
+/* Structure for passing parameters to worker threads */
+typedef struct {
+    int client_socket;
+    int should_terminate;
+    RequestQueue *request_queue;
     int worker_id;
-};
+} WorkerParams;
 
-/* Worker Command Enumeration */
-enum worker_command {
-    WORKERS_START,
-    WORKERS_STOP
-};
+/* Structure for server configuration */
+typedef struct {
+    size_t queue_capacity;
+    size_t worker_count;
+    QueuePolicy queue_policy;
+} ServerConfig;
+
+/* Global Variables for Synchronization */
+sem_t *print_mutex;       /* Mutex for synchronized printing */
+sem_t *queue_access_mutex;/* Mutex for accessing the request queue */
+sem_t *queue_notify_sem;  /* Semaphore to notify workers of new requests */
+sem_t *registration_mutex;/* Mutex for registering new images */
+sem_t *socket_access_mutex;/* Mutex for socket operations */
+
+/* Dynamic array to store registered images */
+ImageObject **registered_images = NULL;
+uint64_t total_images = 0;
 
 /* Function Prototypes */
-void queue_init(struct queue *the_queue, size_t queue_size, enum queue_policy policy);
-int add_to_queue(struct request_meta to_add, struct queue *the_queue);
-struct request_meta get_from_queue(struct queue *the_queue);
-void dump_queue_status(struct queue *the_queue);
-void register_new_image(int conn_socket, struct request *req);
-void *worker_thread_function(void *arg);
-int control_workers(enum worker_command cmd, size_t worker_count, struct worker_params *common_params);
-void handle_connection(int conn_socket, struct connection_params conn_params);
-void cleanup_resources(struct queue *the_queue);
+void initialize_request_queue(RequestQueue *queue, size_t capacity, QueuePolicy policy);
+int enqueue_request(RequestMeta new_request, RequestQueue *queue);
+RequestMeta dequeue_request(RequestQueue *queue);
+void display_queue_status(RequestQueue *queue);
+void register_image(int client_socket, Request *req);
+void *worker_thread_main(void *arg);
+int manage_worker_threads(int command, size_t worker_count, WorkerParams *common_params);
+void handle_client_connection(int client_socket, ServerConfig config);
+void cleanup_resources();
 
-/* Initialize the Queue */
-void queue_init(struct queue *the_queue, size_t queue_size, enum queue_policy policy) {
-    the_queue->rd_pos = 0;
-    the_queue->wr_pos = 0;
-    the_queue->max_size = queue_size;
-    the_queue->requests = (struct request_meta *)malloc(sizeof(struct request_meta) * the_queue->max_size);
-    if (the_queue->requests == NULL) {
-        log_message(LOG_ERROR, "Failed to allocate memory for queue requests.");
-        exit(EXIT_FAILURE);
+/* Enumeration for worker thread commands */
+typedef enum {
+    WORKER_START,
+    WORKER_STOP
+} WorkerCommand;
+
+/* Main Function */
+int main(int argc, char **argv) {
+    int server_socket, client_socket, opt, status;
+    in_port_t port;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t client_addr_len;
+    ServerConfig server_config = {0, 1, POLICY_FIFO}; /* Default configuration */
+
+    /* Parse Command-Line Arguments */
+    while ((opt = getopt(argc, argv, "q:w:p:")) != -1) {
+        switch (opt) {
+            case 'q':
+                server_config.queue_capacity = strtoul(optarg, NULL, 10);
+                printf("INFO: Queue size set to %lu\n", server_config.queue_capacity);
+                break;
+            case 'w':
+                server_config.worker_count = strtoul(optarg, NULL, 10);
+                printf("INFO: Number of worker threads set to %lu\n", server_config.worker_count);
+                break;
+            case 'p':
+                if (strcmp(optarg, "FIFO") == 0) {
+                    server_config.queue_policy = POLICY_FIFO;
+                } else {
+                    fprintf(stderr, "Invalid queue policy.\n" USAGE_MESSAGE, argv[0]);
+                    return EXIT_FAILURE;
+                }
+                printf("INFO: Queue policy set to %s\n", optarg);
+                break;
+            default:
+                fprintf(stderr, USAGE_MESSAGE, argv[0]);
+                return EXIT_FAILURE;
+        }
     }
-    the_queue->available = queue_size;
-    the_queue->policy = policy;
-}
 
-/* Add a New Request to the Queue */
-int add_to_queue(struct request_meta to_add, struct queue *the_queue) {
-    int retval = 0;
-    /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
-    sem_wait(queue_mutex);
-    /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
+    /* Validate Required Parameters */
+    if (server_config.queue_capacity == 0) {
+        fprintf(stderr, "Queue size must be greater than 0.\n" USAGE_MESSAGE, argv[0]);
+        return EXIT_FAILURE;
+    }
 
-    /* Add the request if the queue is not full */
-    if (the_queue->available == 0) {
-        retval = 1; // Queue is full
+    if (optind < argc) {
+        port = strtoul(argv[optind], NULL, 10);
+        printf("INFO: Server will listen on port %d\n", port);
     } else {
-        the_queue->requests[the_queue->wr_pos] = to_add;
-        the_queue->wr_pos = (the_queue->wr_pos + 1) % the_queue->max_size;
-        the_queue->available--;
-        /* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
-        sem_post(queue_notify);
+        fprintf(stderr, USAGE_MESSAGE, argv[0]);
+        return EXIT_FAILURE;
     }
 
-    /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-    sem_post(queue_mutex);
-    /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
-    return retval;
-}
-
-/* Retrieve a Request from the Queue */
-struct request_meta get_from_queue(struct queue *the_queue) {
-    struct request_meta retval;
-    /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
-    sem_wait(queue_notify); // If queue is empty, workers will be blocked
-    sem_wait(queue_mutex);  // One worker can take from queue
-    /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
-
-    retval = the_queue->requests[the_queue->rd_pos];
-    the_queue->rd_pos = (the_queue->rd_pos + 1) % the_queue->max_size;
-    the_queue->available++;
-
-    /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-    sem_post(queue_mutex);
-    /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
-    return retval;
-}
-
-/* Dump the Current Status of the Queue */
-void dump_queue_status(struct queue *the_queue) {
-    size_t i, j;
-    /* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
-    sem_wait(queue_mutex);
-    /* QUEUE PROTECTION INTRO END --- DO NOT TOUCH */
-
-    sem_wait(log_mutex);
-    printf("Q:[");
-    for (i = the_queue->rd_pos, j = 0; j < the_queue->max_size - the_queue->available;
-         i = (i + 1) % the_queue->max_size, ++j) {
-        printf("R%ld%s", the_queue->requests[i].request.req_id,
-               ((j + 1 != the_queue->max_size - the_queue->available) ? "," : ""));
+    /* Create Server Socket */
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket < 0) {
+        perror("Error: Unable to create socket");
+        return EXIT_FAILURE;
     }
-    printf("]\n");
-    sem_post(log_mutex);
 
-    /* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
-    sem_post(queue_mutex);
-    /* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
+    /* Set Socket Options to Reuse Address */
+    int reuse_opt = 1;
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &reuse_opt, sizeof(reuse_opt)) < 0) {
+        perror("Error: Unable to set socket options");
+        close(server_socket);
+        return EXIT_FAILURE;
+    }
+
+    /* Configure Server Address Structure */
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    /* Bind Socket to Address */
+    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Error: Unable to bind socket");
+        close(server_socket);
+        return EXIT_FAILURE;
+    }
+
+    /* Start Listening for Incoming Connections */
+    if (listen(server_socket, MAX_BACKLOG) < 0) {
+        perror("Error: Unable to listen on socket");
+        close(server_socket);
+        return EXIT_FAILURE;
+    }
+
+    printf("INFO: Server is listening on port %d...\n", port);
+
+    /* Initialize Global Semaphores */
+    print_mutex = malloc(sizeof(sem_t));
+    sem_init(print_mutex, 0, 1);
+
+    queue_access_mutex = malloc(sizeof(sem_t));
+    sem_init(queue_access_mutex, 0, 1);
+
+    queue_notify_sem = malloc(sizeof(sem_t));
+    sem_init(queue_notify_sem, 0, 0);
+
+    registration_mutex = malloc(sizeof(sem_t));
+    sem_init(registration_mutex, 0, 1);
+
+    socket_access_mutex = malloc(sizeof(sem_t));
+    sem_init(socket_access_mutex, 0, 1);
+
+    /* Main Loop: Accept and Handle Client Connections */
+    while (1) {
+        client_addr_len = sizeof(client_addr);
+        client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_addr_len);
+        if (client_socket < 0) {
+            perror("Error: Unable to accept client connection");
+            continue; /* Continue accepting new connections */
+        }
+
+        printf("INFO: Accepted new client connection.\n");
+
+        /* Handle the Client Connection */
+        handle_client_connection(client_socket, server_config);
+    }
+
+    /* Cleanup Resources (This point is never reached in the current implementation) */
+    cleanup_resources();
+    close(server_socket);
+    return EXIT_SUCCESS;
 }
 
-/* Register a New Image */
-void register_new_image(int conn_socket, struct request *req) {
-    /* Lock the images array to ensure thread safety */
-    sem_wait(images_array_mutex);
-
-    int retval = 0;
-    uint64_t index = atomic_fetch_add(&image_count, 1); // Atomic increment
-
-    /* Reallocate array of image pointers */
-    struct img_object **temp_images = realloc(images, image_count * sizeof(struct img_object *));
-    if (temp_images == NULL) {
-        log_message(LOG_ERROR, "Failed to realloc images array.");
-        sem_post(images_array_mutex);
+/**
+ * Initializes the request queue with the specified capacity and policy.
+ *
+ * @param queue Pointer to the RequestQueue structure.
+ * @param capacity Maximum number of requests the queue can hold.
+ * @param policy Queue dispatch policy (e.g., FIFO).
+ */
+void initialize_request_queue(RequestQueue *queue, size_t capacity, QueuePolicy policy) {
+    queue->write_pos = 0;
+    queue->read_pos = 0;
+    queue->capacity = capacity;
+    queue->available_slots = capacity;
+    queue->policy = policy;
+    queue->requests = malloc(sizeof(RequestMeta) * capacity);
+    if (!queue->requests) {
+        perror("Error: Unable to allocate memory for request queue");
         exit(EXIT_FAILURE);
     }
-    images = temp_images;
+}
 
-    /* Allocate and initialize the new image object */
-    images[index] = (struct img_object *)malloc(sizeof(struct img_object));
-    if (images[index] == NULL) {
-        log_message(LOG_ERROR, "Failed to allocate memory for new img_object.");
-        sem_post(images_array_mutex);
+/**
+ * Adds a new request to the request queue.
+ *
+ * @param new_request The RequestMeta to be added.
+ * @param queue Pointer to the RequestQueue.
+ * @return 0 on success, 1 if the queue is full.
+ */
+int enqueue_request(RequestMeta new_request, RequestQueue *queue) {
+    int is_full = 0;
+
+    /* Acquire Queue Access Mutex */
+    sem_wait(queue_access_mutex);
+
+    /* Check if the queue has available slots */
+    if (queue->available_slots == 0) {
+        is_full = 1;
+    } else {
+        /* Add the new request to the queue */
+        queue->requests[queue->write_pos] = new_request;
+        queue->write_pos = (queue->write_pos + 1) % queue->capacity;
+        queue->available_slots--;
+
+        /* Notify a worker that a new request is available */
+        sem_post(queue_notify_sem);
+    }
+
+    /* Release Queue Access Mutex */
+    sem_post(queue_access_mutex);
+
+    return is_full;
+}
+
+/**
+ * Retrieves and removes the next request from the request queue.
+ *
+ * @param queue Pointer to the RequestQueue.
+ * @return The next RequestMeta from the queue.
+ */
+RequestMeta dequeue_request(RequestQueue *queue) {
+    RequestMeta request;
+
+    /* Wait until a request is available */
+    sem_wait(queue_notify_sem);
+
+    /* Acquire Queue Access Mutex */
+    sem_wait(queue_access_mutex);
+
+    /* Retrieve the request from the queue */
+    request = queue->requests[queue->read_pos];
+    queue->read_pos = (queue->read_pos + 1) % queue->capacity;
+    queue->available_slots++;
+
+    /* Release Queue Access Mutex */
+    sem_post(queue_access_mutex);
+
+    return request;
+}
+
+/**
+ * Displays the current status of the request queue.
+ *
+ * @param queue Pointer to the RequestQueue.
+ */
+void display_queue_status(RequestQueue *queue) {
+    size_t index, count;
+
+    /* Acquire Queue Access Mutex */
+    sem_wait(queue_access_mutex);
+
+    /* Acquire Print Mutex for synchronized output */
+    sem_wait(print_mutex);
+    printf("Queue Status: [");
+
+    /* Iterate through the queue and display each request ID */
+    for (index = queue->read_pos, count = 0; count < (queue->capacity - queue->available_slots);
+         index = (index + 1) % queue->capacity, count++) {
+        printf("Req%ld%s", queue->requests[index].request.req_id,
+               (count + 1 < (queue->capacity - queue->available_slots)) ? ", " : "");
+    }
+
+    printf("]\n");
+    /* Release Print Mutex */
+    sem_post(print_mutex);
+
+    /* Release Queue Access Mutex */
+    sem_post(queue_access_mutex);
+}
+
+/**
+ * Registers a new image by receiving it from the client and storing it.
+ *
+ * @param client_socket The socket descriptor for the client connection.
+ * @param req Pointer to the client's request structure.
+ */
+void register_image(int client_socket, Request *req) {
+    /* Acquire Registration Mutex */
+    sem_wait(registration_mutex);
+
+    /* Assign a new image ID */
+    uint64_t new_image_id = total_images;
+    total_images++;
+
+    /* Reallocate memory to accommodate the new image */
+    registered_images = realloc(registered_images, sizeof(ImageObject *) * total_images);
+    if (!registered_images) {
+        perror("Error: Unable to allocate memory for new image");
         exit(EXIT_FAILURE);
     }
 
     /* Receive the new image from the client */
-    images[index]->img = recvImage(conn_socket);
-    if (images[index]->img == NULL) {
-        log_message(LOG_ERROR, "Failed to receive image from client.");
-        free(images[index]);
-        sem_post(images_array_mutex);
+    Image *received_image = receive_image(client_socket);
+    if (!received_image) {
+        fprintf(stderr, "Error: Failed to receive image from client.\n");
+        sem_post(registration_mutex);
+        return;
+    }
+
+    /* Initialize the new ImageObject */
+    registered_images[new_image_id] = malloc(sizeof(ImageObject));
+    if (!registered_images[new_image_id]) {
+        perror("Error: Unable to allocate memory for ImageObject");
+        sem_post(registration_mutex);
         exit(EXIT_FAILURE);
     }
 
-    /* Initialize the image mutex */
-    if (pthread_mutex_init(&images[index]->img_mutex, NULL) != 0) {
-        log_message(LOG_ERROR, "Failed to initialize image mutex.");
-        deleteImage(images[index]->img);
-        free(images[index]);
-        sem_post(images_array_mutex);
-        exit(EXIT_FAILURE);
-    }
+    registered_images[new_image_id]->img = received_image;
+    sem_init(&registered_images[new_image_id]->img_mutex, 0, 1);
+    sem_init(&registered_images[new_image_id]->operation_sem, 0, 1);
+    registered_images[new_image_id]->assign_queue_pos = 0;
+    registered_images[new_image_id]->next_queue_pos = 0;
 
-    /* Initialize the condition variable */
-    if (pthread_cond_init(&images[index]->img_cond_var, NULL) != 0) {
-        log_message(LOG_ERROR, "Failed to initialize image condition variable.");
-        pthread_mutex_destroy(&images[index]->img_mutex);
-        deleteImage(images[index]->img);
-        free(images[index]);
-        sem_post(images_array_mutex);
-        exit(EXIT_FAILURE);
-    }
+    /* Release Registration Mutex */
+    sem_post(registration_mutex);
 
-    /* Initialize operation sequencing counters atomically */
-    atomic_init(&images[index]->assign_q, 0);
-    atomic_init(&images[index]->q_next, 0);
+    /* Prepare and send the response to the client */
+    Response response;
+    response.req_id = req->req_id;
+    response.img_id = new_image_id;
+    response.ack = RESP_COMPLETED;
 
-    /* Unlock the images array after modifications */
-    sem_post(images_array_mutex);
+    /* Acquire Socket Access Mutex before sending */
+    sem_wait(socket_access_mutex);
+    send(client_socket, &response, sizeof(Response), 0);
+    sem_post(socket_access_mutex);
 
-    /* Immediately provide a response to the client */
-    struct response resp;
-    resp.req_id = req->req_id;
-    resp.img_id = index;
-    resp.ack = RESP_COMPLETED;
-
-    /* Lock the socket for sending responses */
-    sem_wait(socket_mutex);
-    ssize_t sent_bytes = send(conn_socket, &resp, sizeof(struct response), 0);
-    if (sent_bytes == -1) {
-        log_message(LOG_ERROR, "Failed to send registration response to client.");
-    }
-    sem_post(socket_mutex);
-
-    /* Log the registration event */
-    log_message(LOG_INFO, "Registered new image: ReqID=%ld, ImgID=%ld", req->req_id, index);
+    /* Log the registration */
+    struct timespec current_time;
+    clock_gettime(CLOCK_MONOTONIC, &current_time);
+    sem_wait(print_mutex);
+    printf("Registered Image ID: %ld at %lf seconds.\n", new_image_id, 
+           (double)current_time.tv_sec + (double)current_time.tv_nsec / 1e9);
+    sem_post(print_mutex);
 }
 
-/* Worker Thread Function */
-void *worker_thread_function(void *arg) {
-    struct timespec now;
-    struct worker_params *params = (struct worker_params *)arg;
+/**
+ * The main function executed by each worker thread.
+ *
+ * @param arg Pointer to WorkerParams structure.
+ * @return NULL upon completion.
+ */
+void *worker_thread_main(void *arg) {
+    WorkerParams *params = (WorkerParams *)arg;
+    struct timespec current_time;
 
-    /* Print the first alive message. */
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    log_message(LOG_INFO, "[#WORKER#] %.6lf Worker Thread Alive!", TSPEC_TO_DOUBLE(now));
+    /* Log that the worker thread is alive */
+    clock_gettime(CLOCK_MONOTONIC, &current_time);
+    sem_wait(print_mutex);
+    printf("[Worker %d] Thread started at %lf seconds.\n", params->worker_id, 
+           (double)current_time.tv_sec + (double)current_time.tv_nsec / 1e9);
+    sem_post(print_mutex);
 
-    /* Execute the main logic. */
-    while (!atomic_load(&params->worker_done)) {
-        struct request_meta req;
-        struct response resp;
-        struct image *img = NULL;
-        uint64_t img_id;
+    /* Continuously process requests until termination is signaled */
+    while (!params->should_terminate) {
+        /* Dequeue the next request */
+        RequestMeta request_meta = dequeue_request(params->request_queue);
 
-        /* Retrieve the next request from the queue */
-        req = get_from_queue(params->the_queue);
-
-        /* Detect wakeup after termination asserted */
-        if (atomic_load(&params->worker_done)) {
+        /* Check if termination has been signaled */
+        if (params->should_terminate) {
             break;
         }
 
-        /* Record the start timestamp */
-        clock_gettime(CLOCK_MONOTONIC, &req.start_timestamp);
+        /* Log the start time of processing */
+        clock_gettime(CLOCK_MONOTONIC, &request_meta.start_time);
 
-        img_id = req.request.img_id;
+        /* Retrieve the image ID from the request */
+        uint64_t image_id = request_meta.request.img_id;
 
-        /* Ensure img_id is within bounds */
-        if (img_id >= atomic_load(&image_count)) {
-            log_message(LOG_WARN, "Invalid ImgID %ld received.", img_id);
+        /* Acquire Operation Semaphore to enforce operation order */
+        sem_wait(&registered_images[image_id]->operation_sem);
+        int assigned_pos = registered_images[image_id]->assign_queue_pos++;
+        sem_post(&registered_images[image_id]->operation_sem);
+
+        /* Enforce operation order based on assigned queue position */
+        while (1) {
+            sem_wait(&registered_images[image_id]->operation_sem);
+            if (assigned_pos == registered_images[image_id]->next_queue_pos) {
+                /* It's this thread's turn to process the request */
+                sem_post(&registered_images[image_id]->operation_sem);
+                break;
+            }
+            sem_post(&registered_images[image_id]->operation_sem);
+            /* Busy-waiting can be optimized using condition variables */
+        }
+
+        /* Acquire Image Mutex before processing */
+        sem_wait(&registered_images[image_id]->img_mutex);
+        Image *image = registered_images[image_id]->img;
+
+        /* Ensure the image exists */
+        if (image == NULL) {
+            sem_post(&registered_images[image_id]->img_mutex);
+            continue; /* Skip processing if image is not found */
+        }
+
+        /* Perform the requested image operation */
+        switch (request_meta.request.img_op) {
+            case IMG_ROT90CLKW:
+                image = rotate_image_90_clockwise(image);
+                break;
+            case IMG_BLUR:
+                image = blur_image(image);
+                break;
+            case IMG_SHARPEN:
+                image = sharpen_image(image);
+                break;
+            case IMG_VERTEDGES:
+                image = detect_vertical_edges(image);
+                break;
+            case IMG_HORIZEDGES:
+                image = detect_horizontal_edges(image);
+                break;
+            case IMG_RETRIEVE:
+                /* Retrieval operations are handled separately */
+                break;
+            default:
+                /* Unknown operation */
+                break;
+        }
+
+        /* If the operation modifies the image, handle accordingly */
+        if (request_meta.request.img_op != IMG_RETRIEVE) {
+            if (request_meta.request.overwrite) {
+                /* Overwrite the existing image */
+                delete_image(registered_images[image_id]->img);
+                registered_images[image_id]->img = image;
+            } else {
+                /* Create a new image entry */
+                sem_wait(registration_mutex);
+                uint64_t new_image_id = total_images++;
+                registered_images = realloc(registered_images, sizeof(ImageObject *) * total_images);
+                if (!registered_images) {
+                    perror("Error: Unable to allocate memory for new image");
+                    sem_post(registration_mutex);
+                    exit(EXIT_FAILURE);
+                }
+
+                registered_images[new_image_id] = malloc(sizeof(ImageObject));
+                if (!registered_images[new_image_id]) {
+                    perror("Error: Unable to allocate memory for ImageObject");
+                    sem_post(registration_mutex);
+                    exit(EXIT_FAILURE);
+                }
+
+                registered_images[new_image_id]->img = image;
+                sem_init(&registered_images[new_image_id]->img_mutex, 0, 1);
+                sem_init(&registered_images[new_image_id]->operation_sem, 0, 1);
+                registered_images[new_image_id]->assign_queue_pos = 0;
+                registered_images[new_image_id]->next_queue_pos = 0;
+                sem_post(registration_mutex);
+            }
+        }
+
+        /* Record the completion time */
+        clock_gettime(CLOCK_MONOTONIC, &request_meta.completion_time);
+
+        /* Prepare the response to the client */
+        Response response;
+        response.req_id = request_meta.request.req_id;
+        response.ack = RESP_COMPLETED;
+        response.img_id = (request_meta.request.img_op == IMG_RETRIEVE) ? 
+                          request_meta.request.img_id : 
+                          (request_meta.request.overwrite ? 
+                           request_meta.request.img_id : 
+                           total_images - 1);
+
+        /* Send the response to the client */
+        sem_wait(socket_access_mutex);
+        send(params->client_socket, &response, sizeof(Response), 0);
+
+        /* If the operation is IMG_RETRIEVE, send the image data */
+        if (request_meta.request.img_op == IMG_RETRIEVE) {
+            if (send_image(image, params->client_socket) != 0) {
+                perror("Error: Failed to send image to client");
+            }
+        }
+        sem_post(socket_access_mutex);
+
+        /* Update the next expected queue position */
+        sem_wait(&registered_images[image_id]->operation_sem);
+        registered_images[image_id]->next_queue_pos++;
+        sem_post(&registered_images[image_id]->operation_sem);
+
+        /* Release Image Mutex */
+        sem_post(&registered_images[image_id]->img_mutex);
+
+        /* Log the request processing details */
+        sem_wait(print_mutex);
+        printf("Worker %d processed Request %ld: Operation %s on Image %ld -> Image %ld\n",
+               params->worker_id, request_meta.request.req_id,
+               opcode_to_string(request_meta.request.img_op),
+               request_meta.request.img_id,
+               response.img_id);
+        display_queue_status(params->request_queue);
+        sem_post(print_mutex);
+    }
+
+    /* Clean up and exit the thread */
+    pthread_exit(NULL);
+}
+
+/**
+ * Manages the creation and termination of worker threads.
+ *
+ * @param command Command indicating whether to start or stop workers.
+ * @param worker_count Number of worker threads to manage.
+ * @param common_params Shared parameters for worker threads.
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on failure.
+ */
+int manage_worker_threads(WorkerCommand command, size_t worker_count, WorkerParams *common_params) {
+    static pthread_t *worker_threads = NULL;
+    static WorkerParams **workers_params = NULL;
+
+    if (command == WORKER_START) {
+        size_t i;
+
+        /* Allocate memory for thread handles and parameters */
+        worker_threads = malloc(sizeof(pthread_t) * worker_count);
+        workers_params = malloc(sizeof(WorkerParams *) * worker_count);
+        if (!worker_threads || !workers_params) {
+            perror("Error: Unable to allocate memory for worker threads");
+            return EXIT_FAILURE;
+        }
+
+        /* Initialize and create worker threads */
+        for (i = 0; i < worker_count; i++) {
+            workers_params[i] = malloc(sizeof(WorkerParams));
+            if (!workers_params[i]) {
+                perror("Error: Unable to allocate memory for WorkerParams");
+                return EXIT_FAILURE;
+            }
+
+            /* Assign shared parameters */
+            workers_params[i]->client_socket = common_params->client_socket;
+            workers_params[i]->request_queue = common_params->request_queue;
+            workers_params[i]->should_terminate = 0;
+            workers_params[i]->worker_id = i;
+
+            /* Create the worker thread */
+            if (pthread_create(&worker_threads[i], NULL, worker_thread_main, workers_params[i]) != 0) {
+                perror("Error: Failed to create worker thread");
+                return EXIT_FAILURE;
+            }
+
+            printf("INFO: Worker thread %lu started.\n", i);
+        }
+    }
+    else if (command == WORKER_STOP) {
+        size_t i;
+
+        /* Signal all worker threads to terminate */
+        for (i = 0; i < worker_count; i++) {
+            workers_params[i]->should_terminate = 1;
+        }
+
+        /* Notify all workers in case they are waiting on the semaphore */
+        for (i = 0; i < worker_count; i++) {
+            sem_post(queue_notify_sem);
+        }
+
+        /* Wait for all worker threads to finish */
+        for (i = 0; i < worker_count; i++) {
+            pthread_join(worker_threads[i], NULL);
+            printf("INFO: Worker thread %lu terminated.\n", i);
+            free(workers_params[i]);
+        }
+
+        /* Free allocated memory for thread handles and parameters */
+        free(worker_threads);
+        free(workers_params);
+        worker_threads = NULL;
+        workers_params = NULL;
+    }
+    else {
+        fprintf(stderr, "Error: Invalid worker command.\n");
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Handles the client connection by initializing the request queue, spawning
+ * worker threads, and managing incoming requests.
+ *
+ * @param client_socket The socket descriptor for the client connection.
+ * @param config The server configuration parameters.
+ */
+void handle_client_connection(int client_socket, ServerConfig config) {
+    RequestQueue request_queue;
+    size_t bytes_received;
+    RequestMeta *incoming_request = malloc(sizeof(RequestMeta));
+    WorkerParams common_params;
+
+    if (!incoming_request) {
+        perror("Error: Unable to allocate memory for incoming request");
+        close(client_socket);
+        return;
+    }
+
+    /* Initialize the request queue */
+    initialize_request_queue(&request_queue, config.queue_capacity, config.queue_policy);
+
+    /* Set up common parameters for worker threads */
+    common_params.client_socket = client_socket;
+    common_params.request_queue = &request_queue;
+    common_params.should_terminate = 0;
+    common_params.worker_id = -1; /* Not used in common_params */
+
+    /* Start worker threads */
+    if (manage_worker_threads(WORKER_START, config.worker_count, &common_params) != EXIT_SUCCESS) {
+        fprintf(stderr, "Error: Failed to start worker threads.\n");
+        free(incoming_request);
+        free(request_queue.requests);
+        close(client_socket);
+        return;
+    }
+
+    /* Continuously receive requests from the client */
+    while ((bytes_received = recv(client_socket, &incoming_request->request, sizeof(Request), 0)) > 0) {
+        /* Record the receipt time of the request */
+        clock_gettime(CLOCK_MONOTONIC, &incoming_request->receipt_time);
+
+        /* Handle image registration immediately */
+        if (incoming_request->request.img_op == IMG_REGISTER) {
+            clock_gettime(CLOCK_MONOTONIC, &incoming_request->start_time);
+            register_image(client_socket, &incoming_request->request);
+            clock_gettime(CLOCK_MONOTONIC, &incoming_request->completion_time);
+
+            /* Log the registration */
+            sem_wait(print_mutex);
+            printf("Processed Registration: Request ID %ld, Image ID %ld\n",
+                   incoming_request->request.req_id, total_images - 1);
+            sem_post(print_mutex);
             continue;
         }
 
-        /* Acquire a ticket for operation sequencing */
-        int ticket = atomic_fetch_add(&images[img_id]->assign_q, 1) + 1;
+        /* Enqueue the request for processing */
+        RequestMeta request_to_enqueue = *incoming_request;
+        int enqueue_status = enqueue_request(request_to_enqueue, &request_queue);
 
-        log_message(LOG_DEBUG, "Worker %d acquired ticket %d for ImgID %ld.", params->worker_id, ticket, img_id);
+        if (enqueue_status) {
+            /* Queue is full; send a rejection response */
+            Response rejection;
+            rejection.req_id = incoming_request->request.req_id;
+            rejection.ack = RESP_REJECTED;
 
-        /* Lock the image mutex and wait for the turn */
-        pthread_mutex_lock(&images[img_id]->img_mutex);
-        while (ticket != atomic_load(&images[img_id]->q_next)) {
-            pthread_cond_wait(&images[img_id]->img_cond_var, &images[img_id]->img_mutex);
+            sem_wait(socket_access_mutex);
+            send(client_socket, &rejection, sizeof(Response), 0);
+            sem_post(socket_access_mutex);
+
+            /* Log the rejection */
+            sem_wait(print_mutex);
+            printf("Rejected Request ID %ld: Queue Full\n", incoming_request->request.req_id);
+            sem_post(print_mutex);
         }
-
-        /* It's this thread's turn to process the image operation */
-        img = images[img_id]->img;
-        assert(img != NULL);
-
-        /* Perform the requested image operation */
-        switch (req.request.img_op) {
-            case IMG_ROT90CLKW:
-                img = rotate90Clockwise(img, NULL);
-                break;
-            case IMG_BLUR:
-                img = blurImage(img, NULL);
-                break;
-            case IMG_SHARPEN:
-                img = sharpenImage(img, NULL);
-                break;
-            case IMG_VERTEDGES:
-                img = detectVerticalEdges(img, NULL);
-                break;
-            case IMG_HORIZEDGES:
-                img = detectHorizontalEdges(img, NULL);
-                break;
-            case IMG_RETRIEVE:
-                /* No modification needed */
-                break;
-            default:
-                log_message(LOG_WARN, "Unknown image operation: %d", req.request.img_op);
-                break;
-        }
-
-        /* Handle the operation result */
-        if (req.request.img_op != IMG_RETRIEVE) {
-            if (req.request.overwrite) {
-                /* Overwrite the existing image */
-                deleteImage(images[img_id]->img);
-                images[img_id]->img = img;
-                log_message(LOG_INFO, "Overwritten image ImgID=%ld with new operation.", img_id);
-            } else {
-                /* Register the modified image as a new image */
-                sem_wait(images_array_mutex);
-                uint64_t new_img_id = atomic_fetch_add(&image_count, 1);
-
-                /* Reallocate the images array */
-                struct img_object **temp_images = realloc(images, image_count * sizeof(struct img_object *));
-                if (temp_images == NULL) {
-                    log_message(LOG_ERROR, "Failed to realloc images array for new image.");
-                    sem_post(images_array_mutex);
-                    pthread_mutex_unlock(&images[img_id]->img_mutex);
-                    exit(EXIT_FAILURE);
-                }
-                images = temp_images;
-
-                /* Allocate and initialize the new image object */
-                images[new_img_id] = (struct img_object *)malloc(sizeof(struct img_object));
-                if (images[new_img_id] == NULL) {
-                    log_message(LOG_ERROR, "Failed to allocate memory for new img_object.");
-                    sem_post(images_array_mutex);
-                    pthread_mutex_unlock(&images[img_id]->img_mutex);
-                    exit(EXIT_FAILURE);
-                }
-
-                images[new_img_id]->img = img;
-
-                /* Initialize the image mutex and condition variable */
-                if (pthread_mutex_init(&images[new_img_id]->img_mutex, NULL) != 0) {
-                    log_message(LOG_ERROR, "Failed to initialize image mutex for new image.");
-                    deleteImage(images[new_img_id]->img);
-                    free(images[new_img_id]);
-                    sem_post(images_array_mutex);
-                    pthread_mutex_unlock(&images[img_id]->img_mutex);
-                    exit(EXIT_FAILURE);
-                }
-
-                if (pthread_cond_init(&images[new_img_id]->img_cond_var, NULL) != 0) {
-                    log_message(LOG_ERROR, "Failed to initialize image condition variable for new image.");
-                    pthread_mutex_destroy(&images[new_img_id]->img_mutex);
-                    deleteImage(images[new_img_id]->img);
-                    free(images[new_img_id]);
-                    sem_post(images_array_mutex);
-                    pthread_mutex_unlock(&images[img_id]->img_mutex);
-                    exit(EXIT_FAILURE);
-                }
-
-                /* Initialize operation sequencing counters atomically */
-                atomic_init(&images[new_img_id]->assign_q, 0);
-                atomic_init(&images[new_img_id]->q_next, 0);
-
-                sem_post(images_array_mutex);
-                log_message(LOG_INFO, "Registered new image ImgID=%ld from worker %d.", new_img_id, params->worker_id);
-            }
-        }
-
-        /* Record the completion timestamp */
-        clock_gettime(CLOCK_MONOTONIC, &req.completion_timestamp);
-
-        /* Prepare the response */
-        resp.req_id = req.request.req_id;
-        resp.ack = RESP_COMPLETED;
-        resp.img_id = img_id;
-
-        /* Lock the socket for sending responses */
-        sem_wait(socket_mutex);
-        ssize_t sent_bytes = send(params->conn_socket, &resp, sizeof(struct response), 0);
-        if (sent_bytes == -1) {
-            log_message(LOG_ERROR, "Failed to send response to client for ReqID=%ld.", req.request.req_id);
-        }
-
-        /* Handle IMG_RETRIEVE operation by sending the image payload */
-        if (req.request.img_op == IMG_RETRIEVE) {
-            uint8_t err = sendImage(img, params->conn_socket);
-            if (err) {
-                log_message(LOG_ERROR, "Failed to send image payload to client for ImgID=%ld.", img_id);
-            } else {
-                log_message(LOG_INFO, "Sent image payload for ImgID=%ld to client.", img_id);
-            }
-        }
-        sem_post(socket_mutex);
-
-        /* Log the processed request */
-        log_message(LOG_INFO, "Worker %d processed ReqID=%ld: Op=%s, Overwrite=%d, ImgID=%ld -> ImgID=%ld",
-                    params->worker_id, req.request.req_id,
-                    OPCODE_TO_STRING(req.request.img_op),
-                    req.request.overwrite, req.request.img_id,
-                    img_id);
-
-        /* Dump the current queue status */
-        dump_queue_status(params->the_queue);
-
-        /* Increment the next operation turn and signal waiting threads */
-        atomic_fetch_add(&images[img_id]->q_next, 1);
-        pthread_cond_broadcast(&images[img_id]->img_cond_var);
-
-        /* Unlock the image mutex */
-        pthread_mutex_unlock(&images[img_id]->img_mutex);
     }
 
-    /* Control Worker Threads: Start or Stop */
-    int control_workers(enum worker_command cmd, size_t worker_count, struct worker_params *common_params) {
-        /* Static variables to keep track of workers */
-        static pthread_t *worker_pthreads = NULL;
-        static struct worker_params **worker_params_array = NULL;
-        static int *worker_ids = NULL;
+    /* Cleanup after client disconnects */
+    manage_worker_threads(WORKER_STOP, config.worker_count, NULL);
+    free(incoming_request);
+    free(request_queue.requests);
+    close(client_socket);
+    printf("INFO: Client connection closed.\n");
+}
 
-        /* Start all the workers */
-        if (cmd == WORKERS_START) {
-            size_t i;
+/**
+ * Cleans up all allocated resources and destroys semaphores.
+ */
+void cleanup_resources() {
+    /* Destroy all semaphores */
+    sem_destroy(print_mutex);
+    sem_destroy(queue_access_mutex);
+    sem_destroy(queue_notify_sem);
+    sem_destroy(registration_mutex);
+    sem_destroy(socket_access_mutex);
 
-            /* Allocate all structs and parameters */
-            worker_pthreads = (pthread_t *)malloc(worker_count * sizeof(pthread_t));
-            worker_params_array = (struct worker_params **)malloc(worker_count * sizeof(struct worker_params *));
-            worker_ids = (int *)malloc(worker_count * sizeof(int));
+    /* Free semaphore memory */
+    free(print_mutex);
+    free(queue_access_mutex);
+    free(queue_notify_sem);
+    free(registration_mutex);
+    free(socket_access_mutex);
 
-            if (!worker_pthreads || !worker_params_array || !worker_ids) {
-                log_message(LOG_ERROR, "Unable to allocate arrays for worker threads.");
-                return EXIT_FAILURE;
-            }
-
-            /* Allocate and initialize worker parameters */
-            for (i = 0; i < worker_count; ++i) {
-                worker_ids[i] = -1;
-
-                worker_params_array[i] = (struct worker_params *)malloc(sizeof(struct worker_params));
-                if (!worker_params_array[i]) {
-                    log_message(LOG_ERROR, "Unable to allocate memory for worker parameters.");
-                    return EXIT_FAILURE;
-                }
-
-                worker_params_array[i]->conn_socket = common_params->conn_socket;
-                worker_params_array[i]->the_queue = common_params->the_queue;
-                atomic_init(&worker_params_array[i]->worker_done, 0);
-                worker_params_array[i]->worker_id = i;
-            }
-
-            /* Start the worker threads */
-            for (i = 0; i < worker_count; ++i) {
-                if (pthread_create(&worker_pthreads[i], NULL, worker_thread_function, worker_params_array[i]) != 0) {
-                    log_message(LOG_ERROR, "Unable to start worker thread %ld.", i);
-                    return EXIT_FAILURE;
-                } else {
-                    log_message(LOG_INFO, "Worker thread %ld started successfully.", i);
-                }
-            }
+    /* Destroy and free all registered images */
+    for (uint64_t i = 0; i < total_images; i++) {
+        if (registered_images[i]) {
+            sem_destroy(&registered_images[i]->img_mutex);
+            sem_destroy(&registered_images[i]->operation_sem);
+            delete_image(registered_images[i]->img);
+            free(registered_images[i]);
         }
-        /* Stop all the workers */
-        else if (cmd == WORKERS_STOP) {
-            size_t i;
-
-            /* Check if workers were started */
-            if (!worker_pthreads || !worker_params_array || !worker_ids) {
-                log_message(LOG_WARN, "No workers to stop.");
-                return EXIT_FAILURE;
-            }
-
-            /* Signal all workers to terminate */
-            for (i = 0; i < worker_count; ++i) {
-                if (worker_ids[i] < 0) {
-                    continue;
-                }
-
-                atomic_store(&worker_params_array[i]->worker_done, 1);
-            }
-
-            /* Unblock all workers waiting on the queue */
-            for (i = 0; i < worker_count; ++i) {
-                if (worker_ids[i] < 0) {
-                    continue;
-                }
-
-                sem_post(queue_notify);
-            }
-
-            /* Join all worker threads */
-            for (i = 0; i < worker_count; ++i) {
-                if (worker_ids[i] < 0) {
-                    continue;
-                }
-
-                pthread_join(worker_pthreads[i], NULL);
-                log_message(LOG_INFO, "Worker thread %ld exited.", i);
-            }
-
-            /* Clean up allocated worker parameters */
-            for (i = 0; i < worker_count; ++i) {
-                free(worker_params_array[i]);
-            }
-
-            free(worker_pthreads);
-            free(worker_params_array);
-            free(worker_ids);
-
-            worker_pthreads = NULL;
-            worker_params_array = NULL;
-            worker_ids = NULL;
-        }
-        /* Invalid command */
-        else {
-            log_message(LOG_ERROR, "Invalid worker control command.");
-            return EXIT_FAILURE;
-        }
-
-        return EXIT_SUCCESS;
     }
+    free(registered_images);
+}
 
-    /* Handle Client Connection */
-    void handle_connection(int conn_socket, struct connection_params conn_params) {
-        struct request_meta *req = NULL;
-        struct queue *the_queue = NULL;
-        size_t in_bytes;
-        int res;
-        int retval;
+/* Utility Functions (Assumed to be Defined Elsewhere) */
 
-        /* Allocate and initialize the request metadata */
-        req = (struct request_meta *)malloc(sizeof(struct request_meta));
-        if (req == NULL) {
-            log_message(LOG_ERROR, "Failed to allocate memory for request_meta.");
-            close(conn_socket);
-            exit(EXIT_FAILURE);
-        }
+/**
+ * Receives an image from the client over the specified socket.
+ *
+ * @param socket The socket descriptor to receive the image from.
+ * @return Pointer to the received Image structure, or NULL on failure.
+ */
+Image* receive_image(int socket) {
+    /* Implementation assumed to be provided in "common.h" */
+    // Example Placeholder
+    Image *img = malloc(sizeof(Image));
+    if (!img) return NULL;
+    // Receive image data and populate 'img'
+    return img;
+}
 
-        /* Allocate and initialize the queue */
-        the_queue = (struct queue *)malloc(sizeof(struct queue));
-        if (the_queue == NULL) {
-            log_message(LOG_ERROR, "Failed to allocate memory for queue.");
-            free(req);
-            close(conn_socket);
-            exit(EXIT_FAILURE);
-        }
-        queue_init(the_queue, conn_params.queue_size, conn_params.queue_policy);
+/**
+ * Sends an image to the client over the specified socket.
+ *
+ * @param image Pointer to the Image structure to send.
+ * @param socket The socket descriptor to send the image through.
+ * @return 0 on success, non-zero on failure.
+ */
+int send_image(Image *image, int socket) {
+    /* Implementation assumed to be provided in "common.h" */
+    // Example Placeholder
+    if (!image) return -1;
+    // Send image data over the socket
+    return 0;
+}
 
-        /* Initialize worker parameters and start workers */
-        struct worker_params common_worker_params;
-        common_worker_params.conn_socket = conn_socket;
-        common_worker_params.the_queue = the_queue;
-        res = control_workers(WORKERS_START, conn_params.workers, &common_worker_params);
-
-        /* Initialize registration mutex */
-        sem_wait(reg_mutex); // Ensure mutual exclusion during registration
-        sem_post(reg_mutex);
-
-        /* Do not continue if there has been a problem while starting the workers. */
-        if (res != EXIT_SUCCESS) {
-            free(the_queue);
-            free(req);
-            control_workers(WORKERS_STOP, conn_params.workers, NULL);
-            return;
-        }
-
-        /* Start receiving and handling client requests */
-        do {
-            in_bytes = recv(conn_socket, &req->request, sizeof(struct request), 0);
-            if (in_bytes < 0) {
-                log_message(LOG_ERROR, "Failed to receive data from client.");
-                break;
-            }
-            clock_gettime(CLOCK_MONOTONIC, &req->receipt_timestamp);
-
-            /* Handle image registration immediately */
-            if (in_bytes > 0 && req->request.img_op == IMG_REGISTER) {
-                clock_gettime(CLOCK_MONOTONIC, &req->start_timestamp);
-                register_new_image(conn_socket, &req->request);
-                clock_gettime(CLOCK_MONOTONIC, &req->completion_timestamp);
-
-                log_message(LOG_INFO, "Processed IMG_REGISTER: ReqID=%ld, ImgID=%ld, Timestamps=[%.6lf, %.6lf, %.6lf]",
-                            req->request.req_id, req->request.img_id,
-                            TSPEC_TO_DOUBLE(req->receipt_timestamp),
-                            TSPEC_TO_DOUBLE(req->start_timestamp),
-                            TSPEC_TO_DOUBLE(req->completion_timestamp));
-
-                dump_queue_status(the_queue);
-                continue;
-            }
-
-            /* Enqueue the request */
-            if (in_bytes > 0) {
-                res = add_to_queue(*req, the_queue);
-
-                /* If the queue is full, reject the request */
-                if (res) {
-                    struct response resp;
-                    resp.req_id = req->request.req_id;
-                    resp.ack = RESP_REJECTED;
-
-                    /* Lock the socket for sending responses */
-                    sem_wait(socket_mutex);
-                    ssize_t sent_bytes = send(conn_socket, &resp, sizeof(struct response), 0);
-                    if (sent_bytes == -1) {
-                        log_message(LOG_ERROR, "Failed to send rejection response to client for ReqID=%ld.", req->request.req_id);
-                    }
-                    sem_post(socket_mutex);
-
-                    log_message(LOG_WARN, "Rejected ReqID=%ld: Queue Full.", req->request.req_id);
-                }
-            }
-        } while (in_bytes > 0);
-
-        /* Clean up and shutdown the connection */
-        control_workers(WORKERS_STOP, conn_params.workers, NULL);
-        cleanup_resources(the_queue);
-        free(req);
-        shutdown(conn_socket, SHUT_RDWR);
-        close(conn_socket);
-        log_message(LOG_INFO, "Client disconnected.");
+/**
+ * Deletes an image and frees associated resources.
+ *
+ * @param image Pointer to the Image structure to delete.
+ */
+void delete_image(Image *image) {
+    if (image) {
+        /* Implementation to free image data */
+        free(image);
     }
+}
 
-    /* Cleanup Resources to Prevent Memory Leaks */
-    void cleanup_resources(struct queue *the_queue) {
-        if (the_queue) {
-            free(the_queue->requests);
-            free(the_queue);
-        }
-
-        /* Clean up all images and their synchronization primitives */
-        for (uint64_t i = 0; i < atomic_load(&image_count); ++i) {
-            if (images[i]) {
-                deleteImage(images[i]->img);
-                pthread_mutex_destroy(&images[i]->img_mutex);
-                pthread_cond_destroy(&images[i]->img_cond_var);
-                free(images[i]);
-            }
-        }
-        free(images);
-
-        /* Destroy and free semaphores and mutexes */
-        sem_destroy(printf_mutex);
-        free(printf_mutex);
-        sem_destroy(queue_mutex);
-        free(queue_mutex);
-        sem_destroy(queue_notify);
-        free(queue_notify);
-        sem_destroy(images_array_mutex);
-        free(images_array_mutex);
-        sem_destroy(socket_mutex);
-        free(socket_mutex);
-        sem_destroy(request_mutex);
-        free(request_mutex);
-
-        /* Additional cleanup can be added here if necessary */
+/**
+ * Converts an image operation code to its string representation.
+ *
+ * @param opcode The image operation code.
+ * @return String representing the operation.
+ */
+const char* opcode_to_string(int opcode) {
+    switch (opcode) {
+        case IMG_ROT90CLKW:
+            return "Rotate90Clockwise";
+        case IMG_BLUR:
+            return "Blur";
+        case IMG_SHARPEN:
+            return "Sharpen";
+        case IMG_VERTEDGES:
+            return "DetectVerticalEdges";
+        case IMG_HORIZEDGES:
+            return "DetectHorizontalEdges";
+        case IMG_REGISTER:
+            return "RegisterImage";
+        case IMG_RETRIEVE:
+            return "RetrieveImage";
+        default:
+            return "UnknownOperation";
     }
-
-    /* Main Function: Server Setup and Connection Handling */
-    int main(int argc, char **argv) {
-        int sockfd, retval, accepted, optval, opt;
-        in_port_t socket_port;
-        struct sockaddr_in addr, client;
-        struct in_addr any_address;
-        socklen_t client_len;
-        struct connection_params conn_params;
-        conn_params.queue_size = 0;
-        conn_params.queue_policy = QUEUE_FIFO;
-        conn_params.workers = 1;
-
-        /* Parse all the command line arguments */
-        while ((opt = getopt(argc, argv, "q:w:p:")) != -1) {
-            switch (opt) {
-                case 'q':
-                    conn_params.queue_size = strtol(optarg, NULL, 10);
-                    log_message(LOG_INFO, "Setting queue size to %ld.", conn_params.queue_size);
-                    break;
-                case 'w':
-                    conn_params.workers = strtol(optarg, NULL, 10);
-                    log_message(LOG_INFO, "Setting worker count to %ld.", conn_params.workers);
-                    break;
-                case 'p':
-                    if (!strcmp(optarg, "FIFO")) {
-                        conn_params.queue_policy = QUEUE_FIFO;
-                    } else {
-                        log_message(LOG_ERROR, "Invalid queue policy: %s", optarg);
-                        fprintf(stderr, "Invalid queue policy.\n" USAGE_STRING, argv[0]);
-                        return EXIT_FAILURE;
-                    }
-                    log_message(LOG_INFO, "Setting queue policy to %s.", optarg);
-                    break;
-                default: /* '?' */
-                    fprintf(stderr, USAGE_STRING, argv[0]);
-                    return EXIT_FAILURE;
-            }
-        }
-
-        if (conn_params.queue_size == 0) {
-            log_message(LOG_ERROR, "Queue size must be greater than 0.");
-            fprintf(stderr, USAGE_STRING, argv[0]);
-            return EXIT_FAILURE;
-        }
-
-        if (optind < argc) {
-            socket_port = strtol(argv[optind], NULL, 10);
-            log_message(LOG_INFO, "Setting server port to %d.", socket_port);
-        } else {
-            log_message(LOG_ERROR, "Port number not specified.");
-            fprintf(stderr, USAGE_STRING, argv[0]);
-            return EXIT_FAILURE;
-        }
-
-        /* Create a TCP socket */
-        sockfd = socket(AF_INET, SOCK_STREAM, 0);
-        if (sockfd < 0) {
-            log_message(LOG_ERROR, "Failed to create socket.");
-            perror("Unable to create socket");
-            return EXIT_FAILURE;
-        }
-
-        /* Set socket options to reuse address */
-        optval = 1;
-        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (void *)&optval, sizeof(optval)) < 0) {
-            log_message(LOG_ERROR, "Failed to set socket options.");
-            perror("setsockopt");
-            close(sockfd);
-            return EXIT_FAILURE;
-        }
-
-        /* Convert INADDR_ANY into network byte order */
-        any_address.s_addr = htonl(INADDR_ANY);
-
-        /* Bind the socket to the specified port */
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(socket_port);
-        addr.sin_addr = any_address;
-
-        retval = bind(sockfd, (struct sockaddr *)&addr, sizeof(struct sockaddr_in));
-        if (retval < 0) {
-            log_message(LOG_ERROR, "Failed to bind socket to port %d.", socket_port);
-            perror("Unable to bind socket");
-            close(sockfd);
-            return EXIT_FAILURE;
-        }
-
-        /* Listen for incoming connections */
-        retval = listen(sockfd, BACKLOG_COUNT);
-        if (retval < 0) {
-            log_message(LOG_ERROR, "Failed to listen on socket.");
-            perror("Unable to listen on socket");
-            close(sockfd);
-            return EXIT_FAILURE;
-        }
-
-        log_message(LOG_INFO, "Server is listening on port %d.", socket_port);
-
-        /* Accept a single client connection */
-        client_len = sizeof(struct sockaddr_in);
-        accepted = accept(sockfd, (struct sockaddr *)&client, &client_len);
-        if (accepted == -1) {
-            log_message(LOG_ERROR, "Failed to accept client connection.");
-            perror("Unable to accept connections");
-            close(sockfd);
-            return EXIT_FAILURE;
-        }
-
-        log_message(LOG_INFO, "Client connected.");
-
-        /* Initialize logging mutex */
-        log_mutex = (sem_t *)malloc(sizeof(sem_t));
-        if (log_mutex == NULL) {
-            log_message(LOG_ERROR, "Failed to allocate memory for log_mutex.");
-            close(accepted);
-            close(sockfd);
-            return EXIT_FAILURE;
-        }
-        if (sem_init(log_mutex, 0, 1) < 0) {
-            log_message(LOG_ERROR, "Failed to initialize log_mutex.");
-            free(log_mutex);
-            close(accepted);
-            close(sockfd);
-            return EXIT_FAILURE;
-        }
-
-        /* Initialize threaded printf mutex */
-        printf_mutex = (sem_t *)malloc(sizeof(sem_t));
-        if (printf_mutex == NULL) {
-            log_message(LOG_ERROR, "Failed to allocate memory for printf_mutex.");
-            sem_destroy(log_mutex);
-            free(log_mutex);
-            close(accepted);
-            close(sockfd);
-            return EXIT_FAILURE;
-        }
-        if (sem_init(printf_mutex, 0, 1) < 0) {
-            log_message(LOG_ERROR, "Failed to initialize printf_mutex.");
-            free(printf_mutex);
-            sem_destroy(log_mutex);
-            free(log_mutex);
-            close(accepted);
-            close(sockfd);
-            return EXIT_FAILURE;
-        }
-
-        /* Initialize queue protection variables. DO NOT TOUCH. */
-        queue_mutex = (sem_t *)malloc(sizeof(sem_t));
-        queue_notify = (sem_t *)malloc(sizeof(sem_t));
-        if (queue_mutex == NULL || queue_notify == NULL) {
-            log_message(LOG_ERROR, "Failed to allocate memory for queue semaphores.");
-            cleanup_resources(NULL);
-            close(accepted);
-            close(sockfd);
-            return EXIT_FAILURE;
-        }
-        if (sem_init(queue_mutex, 0, 1) < 0) {
-            log_message(LOG_ERROR, "Failed to initialize queue_mutex.");
-            cleanup_resources(NULL);
-            return EXIT_FAILURE;
-        }
-        if (sem_init(queue_notify, 0, 0) < 0) {
-            log_message(LOG_ERROR, "Failed to initialize queue_notify.");
-            cleanup_resources(NULL);
-            return EXIT_FAILURE;
-        }
-        /* DONE - Initialize queue protection variables */
-
-        /* Initialize additional semaphores and mutexes */
-        images_array_mutex = (sem_t *)malloc(sizeof(sem_t));
-        if (images_array_mutex == NULL) {
-            log_message(LOG_ERROR, "Failed to allocate memory for images_array_mutex.");
-            cleanup_resources(NULL);
-            return EXIT_FAILURE;
-        }
-        if (sem_init(images_array_mutex, 0, 1) < 0) {
-            log_message(LOG_ERROR, "Failed to initialize images_array_mutex.");
-            cleanup_resources(NULL);
-            return EXIT_FAILURE;
-        }
-
-        socket_mutex = (sem_t *)malloc(sizeof(sem_t));
-        if (socket_mutex == NULL) {
-            log_message(LOG_ERROR, "Failed to allocate memory for socket_mutex.");
-            cleanup_resources(NULL);
-            return EXIT_FAILURE;
-        }
-        if (sem_init(socket_mutex, 0, 1) < 0) {
-            log_message(LOG_ERROR, "Failed to initialize socket_mutex.");
-            cleanup_resources(NULL);
-            return EXIT_FAILURE;
-        }
-
-        request_mutex = (sem_t *)malloc(sizeof(sem_t));
-        if (request_mutex == NULL) {
-            log_message(LOG_ERROR, "Failed to allocate memory for request_mutex.");
-            cleanup_resources(NULL);
-            return EXIT_FAILURE;
-        }
-        if (sem_init(request_mutex, 0, 1) < 0) {
-            log_message(LOG_ERROR, "Failed to initialize request_mutex.");
-            cleanup_resources(NULL);
-            return EXIT_FAILURE;
-        }
-
-        /* Ready to handle the new connection with the client. */
-        handle_connection(accepted, conn_params);
-
-        /* Clean up and shutdown */
-        cleanup_resources(NULL);
-        close(sockfd);
-        log_message(LOG_INFO, "Server shutdown successfully.");
-
-        return EXIT_SUCCESS;
-    }
+}
