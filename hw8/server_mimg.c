@@ -82,9 +82,9 @@ typedef struct {
 typedef struct {
     Image *img;
     sem_t img_mutex;          /* Mutex to protect image access */
-    sem_t operation_sem;     /* Semaphore to enforce operation order */
-    int assign_queue_pos;    /* Position in the operation queue */
-    int next_queue_pos;      /* Next expected operation position */
+    sem_t operation_sem;      /* Semaphore to enforce operation order */
+    int assign_queue_pos;     /* Position in the operation queue */
+    int next_queue_pos;       /* Next expected operation position */
 } ImageObject;
 
 /* Structure for the request queue */
@@ -113,11 +113,11 @@ typedef struct {
 } ServerConfig;
 
 /* Global Variables for Synchronization */
-sem_t *print_mutex;       /* Mutex for synchronized printing */
-sem_t *queue_access_mutex;/* Mutex for accessing the request queue */
-sem_t *queue_notify_sem;  /* Semaphore to notify workers of new requests */
-sem_t *registration_mutex;/* Mutex for registering new images */
-sem_t *socket_access_mutex;/* Mutex for socket operations */
+sem_t *print_mutex;          /* Mutex for synchronized printing */
+sem_t *queue_access_mutex;   /* Mutex for accessing the request queue */
+sem_t *queue_notify_sem;     /* Semaphore to notify workers of new requests */
+sem_t *registration_mutex;   /* Mutex for registering new images */
+sem_t *socket_access_mutex;  /* Mutex for socket operations */
 
 /* Dynamic array to store registered images */
 ImageObject **registered_images = NULL;
@@ -227,18 +227,53 @@ int main(int argc, char **argv) {
 
     /* Initialize Global Semaphores */
     print_mutex = malloc(sizeof(sem_t));
+    if (!print_mutex) {
+        perror("Error: Unable to allocate memory for print_mutex");
+        close(server_socket);
+        return EXIT_FAILURE;
+    }
     sem_init(print_mutex, 0, 1);
 
     queue_access_mutex = malloc(sizeof(sem_t));
+    if (!queue_access_mutex) {
+        perror("Error: Unable to allocate memory for queue_access_mutex");
+        free(print_mutex);
+        close(server_socket);
+        return EXIT_FAILURE;
+    }
     sem_init(queue_access_mutex, 0, 1);
 
     queue_notify_sem = malloc(sizeof(sem_t));
+    if (!queue_notify_sem) {
+        perror("Error: Unable to allocate memory for queue_notify_sem");
+        free(print_mutex);
+        free(queue_access_mutex);
+        close(server_socket);
+        return EXIT_FAILURE;
+    }
     sem_init(queue_notify_sem, 0, 0);
 
     registration_mutex = malloc(sizeof(sem_t));
+    if (!registration_mutex) {
+        perror("Error: Unable to allocate memory for registration_mutex");
+        free(print_mutex);
+        free(queue_access_mutex);
+        free(queue_notify_sem);
+        close(server_socket);
+        return EXIT_FAILURE;
+    }
     sem_init(registration_mutex, 0, 1);
 
     socket_access_mutex = malloc(sizeof(sem_t));
+    if (!socket_access_mutex) {
+        perror("Error: Unable to allocate memory for socket_access_mutex");
+        free(print_mutex);
+        free(queue_access_mutex);
+        free(queue_notify_sem);
+        free(registration_mutex);
+        close(server_socket);
+        return EXIT_FAILURE;
+    }
     sem_init(socket_access_mutex, 0, 1);
 
     /* Main Loop: Accept and Handle Client Connections */
@@ -392,7 +427,7 @@ void register_image(int client_socket, Request *req) {
     }
 
     /* Receive the new image from the client */
-    Image *received_image = receive_image(client_socket);
+    Image *received_image = recvImage(client_socket);
     if (!received_image) {
         fprintf(stderr, "Error: Failed to receive image from client.\n");
         sem_post(registration_mutex);
@@ -499,19 +534,19 @@ void *worker_thread_main(void *arg) {
         /* Perform the requested image operation */
         switch (request_meta.request.img_op) {
             case IMG_ROT90CLKW:
-                image = rotate_image_90_clockwise(image);
+                image = rotate90Clockwise(image, NULL);
                 break;
             case IMG_BLUR:
-                image = blur_image(image);
+                image = blurImage(image, NULL);
                 break;
             case IMG_SHARPEN:
-                image = sharpen_image(image);
+                image = sharpenImage(image, NULL);
                 break;
             case IMG_VERTEDGES:
-                image = detect_vertical_edges(image);
+                image = detectVerticalEdges(image, NULL);
                 break;
             case IMG_HORIZEDGES:
-                image = detect_horizontal_edges(image);
+                image = detectHorizontalEdges(image, NULL);
                 break;
             case IMG_RETRIEVE:
                 /* Retrieval operations are handled separately */
@@ -525,7 +560,7 @@ void *worker_thread_main(void *arg) {
         if (request_meta.request.img_op != IMG_RETRIEVE) {
             if (request_meta.request.overwrite) {
                 /* Overwrite the existing image */
-                delete_image(registered_images[image_id]->img);
+                deleteImage(registered_images[image_id]->img);
                 registered_images[image_id]->img = image;
             } else {
                 /* Create a new image entry */
@@ -573,7 +608,7 @@ void *worker_thread_main(void *arg) {
 
         /* If the operation is IMG_RETRIEVE, send the image data */
         if (request_meta.request.img_op == IMG_RETRIEVE) {
-            if (send_image(image, params->client_socket) != 0) {
+            if (sendImage(image, params->client_socket) != 0) {
                 perror("Error: Failed to send image to client");
             }
         }
@@ -652,8 +687,10 @@ int manage_worker_threads(WorkerCommand command, size_t worker_count, WorkerPara
         size_t i;
 
         /* Signal all worker threads to terminate */
-        for (i = 0; i < worker_count; i++) {
-            workers_params[i]->should_terminate = 1;
+        for (i = 0; i < (workers_params ? sizeof(workers_params) / sizeof(WorkerParams *) : 0); i++) {
+            if (workers_params[i]) {
+                workers_params[i]->should_terminate = 1;
+            }
         }
 
         /* Notify all workers in case they are waiting on the semaphore */
@@ -663,9 +700,11 @@ int manage_worker_threads(WorkerCommand command, size_t worker_count, WorkerPara
 
         /* Wait for all worker threads to finish */
         for (i = 0; i < worker_count; i++) {
-            pthread_join(worker_threads[i], NULL);
-            printf("INFO: Worker thread %lu terminated.\n", i);
-            free(workers_params[i]);
+            if (workers_params[i]) {
+                pthread_join(worker_threads[i], NULL);
+                printf("INFO: Worker thread %lu terminated.\n", i);
+                free(workers_params[i]);
+            }
         }
 
         /* Free allocated memory for thread handles and parameters */
@@ -692,14 +731,8 @@ int manage_worker_threads(WorkerCommand command, size_t worker_count, WorkerPara
 void handle_client_connection(int client_socket, ServerConfig config) {
     RequestQueue request_queue;
     size_t bytes_received;
-    RequestMeta *incoming_request = malloc(sizeof(RequestMeta));
+    RequestMeta incoming_request;
     WorkerParams common_params;
-
-    if (!incoming_request) {
-        perror("Error: Unable to allocate memory for incoming request");
-        close(client_socket);
-        return;
-    }
 
     /* Initialize the request queue */
     initialize_request_queue(&request_queue, config.queue_capacity, config.queue_policy);
@@ -713,39 +746,38 @@ void handle_client_connection(int client_socket, ServerConfig config) {
     /* Start worker threads */
     if (manage_worker_threads(WORKER_START, config.worker_count, &common_params) != EXIT_SUCCESS) {
         fprintf(stderr, "Error: Failed to start worker threads.\n");
-        free(incoming_request);
         free(request_queue.requests);
         close(client_socket);
         return;
     }
 
     /* Continuously receive requests from the client */
-    while ((bytes_received = recv(client_socket, &incoming_request->request, sizeof(Request), 0)) > 0) {
+    while ((bytes_received = recv(client_socket, &incoming_request.request, sizeof(Request), 0)) > 0) {
         /* Record the receipt time of the request */
-        clock_gettime(CLOCK_MONOTONIC, &incoming_request->receipt_time);
+        clock_gettime(CLOCK_MONOTONIC, &incoming_request.receipt_time);
 
         /* Handle image registration immediately */
-        if (incoming_request->request.img_op == IMG_REGISTER) {
-            clock_gettime(CLOCK_MONOTONIC, &incoming_request->start_time);
-            register_image(client_socket, &incoming_request->request);
-            clock_gettime(CLOCK_MONOTONIC, &incoming_request->completion_time);
+        if (incoming_request.request.img_op == IMG_REGISTER) {
+            clock_gettime(CLOCK_MONOTONIC, &incoming_request.start_time);
+            register_image(client_socket, &incoming_request.request);
+            clock_gettime(CLOCK_MONOTONIC, &incoming_request.completion_time);
 
             /* Log the registration */
             sem_wait(print_mutex);
             printf("Processed Registration: Request ID %ld, Image ID %ld\n",
-                   incoming_request->request.req_id, total_images - 1);
+                   incoming_request.request.req_id, total_images - 1);
             sem_post(print_mutex);
             continue;
         }
 
         /* Enqueue the request for processing */
-        RequestMeta request_to_enqueue = *incoming_request;
+        RequestMeta request_to_enqueue = incoming_request;
         int enqueue_status = enqueue_request(request_to_enqueue, &request_queue);
 
         if (enqueue_status) {
             /* Queue is full; send a rejection response */
             Response rejection;
-            rejection.req_id = incoming_request->request.req_id;
+            rejection.req_id = incoming_request.request.req_id;
             rejection.ack = RESP_REJECTED;
 
             sem_wait(socket_access_mutex);
@@ -754,14 +786,13 @@ void handle_client_connection(int client_socket, ServerConfig config) {
 
             /* Log the rejection */
             sem_wait(print_mutex);
-            printf("Rejected Request ID %ld: Queue Full\n", incoming_request->request.req_id);
+            printf("Rejected Request ID %ld: Queue Full\n", incoming_request.request.req_id);
             sem_post(print_mutex);
         }
     }
 
     /* Cleanup after client disconnects */
     manage_worker_threads(WORKER_STOP, config.worker_count, NULL);
-    free(incoming_request);
     free(request_queue.requests);
     close(client_socket);
     printf("INFO: Client connection closed.\n");
@@ -790,7 +821,7 @@ void cleanup_resources() {
         if (registered_images[i]) {
             sem_destroy(&registered_images[i]->img_mutex);
             sem_destroy(&registered_images[i]->operation_sem);
-            delete_image(registered_images[i]->img);
+            deleteImage(registered_images[i]->img);
             free(registered_images[i]);
         }
     }
@@ -805,7 +836,7 @@ void cleanup_resources() {
  * @param socket The socket descriptor to receive the image from.
  * @return Pointer to the received Image structure, or NULL on failure.
  */
-Image* receive_image(int socket) {
+Image* recvImage(int socket) {
     /* Implementation assumed to be provided in "common.h" */
     // Example Placeholder
     Image *img = malloc(sizeof(Image));
@@ -821,7 +852,7 @@ Image* receive_image(int socket) {
  * @param socket The socket descriptor to send the image through.
  * @return 0 on success, non-zero on failure.
  */
-int send_image(Image *image, int socket) {
+int sendImage(Image *image, int socket) {
     /* Implementation assumed to be provided in "common.h" */
     // Example Placeholder
     if (!image) return -1;
@@ -832,12 +863,12 @@ int send_image(Image *image, int socket) {
 /**
  * Deletes an image and frees associated resources.
  *
- * @param image Pointer to the Image structure to delete.
+ * @param img Pointer to the Image structure to delete.
  */
-void delete_image(Image *image) {
-    if (image) {
+void deleteImage(Image *img) {
+    if (img) {
         /* Implementation to free image data */
-        free(image);
+        free(img);
     }
 }
 
